@@ -11,6 +11,72 @@ import {
   markMessageProcessed,
 } from "../queue/message-queue.js";
 
+interface ParsedMessage {
+  from: string;
+  body: string;
+  messageId: string;
+  isForwarded: boolean;
+}
+
+/**
+ * Parse incoming webhook payload.
+ * Handles both Kapso v2 format and raw Meta format.
+ */
+function parseWebhookPayload(payload: any): ParsedMessage[] {
+  const messages: ParsedMessage[] = [];
+
+  // Kapso v2 format: { event, data: { message, contact, ... } }
+  if (payload.event && payload.data) {
+    const data = payload.data;
+    const msg = data.message || data;
+
+    const from =
+      msg.from ||
+      data.contact?.wa_id ||
+      data.contact?.phone ||
+      "";
+    const messageId = msg.id || msg.message_id || payload.id || "";
+    const body =
+      msg.text?.body ||
+      msg.body ||
+      (typeof msg.text === "string" ? msg.text : "") ||
+      "";
+    const isForwarded = !!(msg.context?.forwarded || msg.context?.from);
+
+    if (from && messageId && body) {
+      messages.push({ from, body, messageId, isForwarded });
+    }
+    return messages;
+  }
+
+  // Kapso v2 array format: [{ event, data }]
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      messages.push(...parseWebhookPayload(item));
+    }
+    return messages;
+  }
+
+  // Meta format: { object: "whatsapp_business_account", entry: [...] }
+  if (payload.object === "whatsapp_business_account") {
+    const result = normalizeWebhook(payload);
+    for (const msg of result.messages) {
+      if (!msg.from || !msg.id) continue;
+      if (msg.type !== "text") continue;
+
+      messages.push({
+        from: msg.from,
+        body: msg.text?.body ?? "",
+        messageId: msg.id,
+        isForwarded: !!msg.context?.from,
+      });
+    }
+    return messages;
+  }
+
+  return messages;
+}
+
 export function createWebhookRouter(): Router {
   const router = Router();
 
@@ -33,7 +99,7 @@ export function createWebhookRouter(): Router {
     const logger = getLogger();
     const config = getConfig();
 
-    // Always respond 200 immediately (WhatsApp retries after 20s)
+    // Always respond 200 immediately
     res.sendStatus(200);
 
     try {
@@ -42,7 +108,7 @@ export function createWebhookRouter(): Router {
         | string
         | undefined;
 
-      // Verify signature (skip in sandbox mode where Kapso handles verification)
+      // Verify signature for Meta webhooks (skip for Kapso proxy)
       if (
         config.META_APP_SECRET !== "skip-in-sandbox-mode" &&
         signatureHeader
@@ -59,36 +125,28 @@ export function createWebhookRouter(): Router {
       }
 
       const payload = JSON.parse(rawBody.toString());
-      const result = normalizeWebhook(payload);
+      const messages = parseWebhookPayload(payload);
 
-      for (const message of result.messages) {
-        if (!message.from || !message.id) continue;
-        if (message.type !== "text") continue;
+      logger.info({ messageCount: messages.length }, "Webhook received");
 
+      for (const message of messages) {
         // Idempotency: skip already-processed messages
-        const alreadyProcessed = await isMessageProcessed(message.id);
+        const alreadyProcessed = await isMessageProcessed(message.messageId);
         if (alreadyProcessed) {
           logger.debug(
-            { messageId: message.id },
+            { messageId: message.messageId },
             "Duplicate message, skipping"
           );
           continue;
         }
 
-        await markMessageProcessed(message.id);
+        await markMessageProcessed(message.messageId);
 
-        const isForwarded = !!message.context?.from;
-
-        // Process async to not block webhook response
+        // Process async
         setImmediate(() => {
-          routeMessage({
-            from: message.from!,
-            body: message.text?.body ?? "",
-            messageId: message.id,
-            isForwarded,
-          }).catch((error) => {
+          routeMessage(message).catch((error) => {
             logger.error(
-              { error, messageId: message.id },
+              { error, messageId: message.messageId },
               "Message processing failed"
             );
           });
