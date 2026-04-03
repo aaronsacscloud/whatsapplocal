@@ -43,20 +43,20 @@ export async function scrapeSanMiguelLive(): Promise<NewEvent[]> {
 }
 
 /**
- * Scrape events from discoversma.com
+ * Scrape events from discoversma.com via RSS feed
  */
 export async function scrapeDiscoverSMA(): Promise<NewEvent[]> {
-  const url = "https://discoversma.com/events/events/";
-  logger.info({ url }, "Scraping discoversma.com");
+  const url = "https://discoversma.com/events/feed/";
+  logger.info({ url }, "Scraping discoversma.com (RSS)");
 
   try {
     const response = await fetch(url);
-    const html = await response.text();
-    const rawEvents = parseDiscoverSMAHTML(html);
+    const xml = await response.text();
+    const rawEvents = parseDiscoverSMARSS(xml);
 
     logger.info(
       { count: rawEvents.length },
-      "Parsed events from discoversma.com"
+      "Parsed events from discoversma.com RSS"
     );
 
     return rawEvents
@@ -117,35 +117,71 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
 }
 
 /**
- * Parse discoversma.com HTML into raw events.
+ * Parse discoversma.com RSS feed into raw events.
  */
-function parseDiscoverSMAHTML(html: string): ScrapedRawEvent[] {
+function parseDiscoverSMARSS(xml: string): ScrapedRawEvent[] {
   const events: ScrapedRawEvent[] = [];
 
-  // DiscoverSMA uses different patterns - extract what we can
-  const eventPattern =
-    /<article[^>]*>([\s\S]*?)<\/article>/gi;
-
+  const itemPattern = /<item>([\s\S]*?)<\/item>/gi;
   let match;
-  while ((match = eventPattern.exec(html)) !== null) {
+
+  while ((match = itemPattern.exec(xml)) !== null) {
     const block = match[1];
 
-    const titleMatch = block.match(/<h[23][^>]*>([^<]+)<\/h[23]>/i);
-    const linkMatch = block.match(/<a[^>]*href="([^"]*)"[^>]*>/i);
-    const dateMatch = block.match(
-      /(\w+\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+\w+\s+\d{4}|\d{4}-\d{2}-\d{2})/i
-    );
+    const title = extractXMLTag(block, "title");
+    const link = extractXMLTag(block, "link");
+    const pubDate = extractXMLTag(block, "pubDate");
+    const description = extractXMLTag(block, "description");
+    const categories = extractAllXMLTags(block, "category");
 
-    if (titleMatch) {
+    if (title) {
+      // Extract venue from title pattern: "Event Name [] Venue Name"
+      const venueSplit = title.split(/\s*\[\]\s*/);
+      const eventTitle = venueSplit[0].trim();
+      const venue = venueSplit.length > 1 ? venueSplit[1].trim() : undefined;
+
       events.push({
-        title: decodeHTML(titleMatch[1].trim()),
-        url: linkMatch?.[1] || undefined,
-        date: dateMatch?.[1] || undefined,
+        title: decodeHTML(eventTitle),
+        venue: venue ? decodeHTML(venue) : undefined,
+        date: pubDate || undefined,
+        category: mapCategory(categories.join(" ")),
+        description: description
+          ? decodeHTML(description.replace(/<[^>]+>/g, " ").trim()).substring(0, 500)
+          : undefined,
+        url: link || undefined,
       });
     }
   }
 
   return events;
+}
+
+function extractXMLTag(xml: string, tag: string): string | null {
+  // Handle CDATA: <tag><![CDATA[content]]></tag>
+  const cdataPattern = new RegExp(
+    `<${tag}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*</${tag}>`,
+    "i"
+  );
+  const cdataMatch = xml.match(cdataPattern);
+  if (cdataMatch) return cdataMatch[1].trim();
+
+  // Handle plain: <tag>content</tag>
+  const plainPattern = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`, "i");
+  const plainMatch = xml.match(plainPattern);
+  return plainMatch ? plainMatch[1].trim() : null;
+}
+
+function extractAllXMLTags(xml: string, tag: string): string[] {
+  const results: string[] = [];
+  const pattern = new RegExp(
+    `<${tag}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?</${tag}>`,
+    "gi"
+  );
+  let match;
+  while ((match = pattern.exec(xml)) !== null) {
+    results.push(match[1].trim());
+  }
+  return results;
 }
 
 function extractField(html: string, fieldName: string): string | null {

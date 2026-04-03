@@ -2,6 +2,7 @@ import express from "express";
 import { loadConfig } from "./config.js";
 import { getLogger } from "./utils/logger.js";
 import { createWebhookRouter } from "./whatsapp/webhook.js";
+import { createAdminRouter } from "./admin/routes.js";
 import { startScheduler } from "./jobs/scheduler.js";
 
 const config = loadConfig();
@@ -48,6 +49,9 @@ app.get("/debug", async (_req, res) => {
   results.city = config.DEFAULT_CITY;
   res.json(results);
 });
+
+// Mount admin dashboard (before raw body parser for webhook)
+app.use(createAdminRouter());
 
 // Raw body parser for webhook signature verification
 app.use("/webhook", express.raw({ type: "application/json" }));
