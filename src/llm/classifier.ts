@@ -40,8 +40,11 @@ export async function classifyIntent(
       messages: [{ role: "user", content: message }],
     });
 
-    const text =
+    const rawText =
       response.content[0].type === "text" ? response.content[0].text : "";
+
+    // Strip markdown code blocks if present (```json ... ```)
+    const text = rawText.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
 
     const parsed = JSON.parse(text);
 

@@ -40,8 +40,11 @@ export async function extractEvent(
       messages: [{ role: "user", content: text }],
     });
 
-    const responseText =
+    const rawText =
       response.content[0].type === "text" ? response.content[0].text : "";
+
+    // Strip markdown code blocks if present
+    const responseText = rawText.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
 
     const parsed = JSON.parse(responseText);
 
