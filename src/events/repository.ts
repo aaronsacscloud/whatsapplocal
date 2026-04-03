@@ -52,41 +52,43 @@ export interface SearchFilters {
 
 export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
   const db = getDb();
-  const conditions = [eq(events.city, filters.city)];
+
+  // Build raw SQL for reliable date handling with postgres-js
+  const conditions: string[] = [`city = '${filters.city.replace(/'/g, "''")}'`];
 
   if (filters.neighborhood) {
-    conditions.push(ilike(events.neighborhood, `%${filters.neighborhood}%`));
+    conditions.push(`neighborhood ILIKE '%${filters.neighborhood.replace(/'/g, "''")}%'`);
   }
 
   if (filters.category) {
-    conditions.push(eq(events.category, filters.category as any));
+    conditions.push(`category = '${filters.category}'`);
   }
 
   if (filters.dateFrom) {
-    conditions.push(gte(events.eventDate, filters.dateFrom));
+    conditions.push(`(event_date >= '${filters.dateFrom.toISOString()}'::timestamptz OR event_date IS NULL)`);
   }
 
   if (filters.dateTo) {
-    conditions.push(lte(events.eventDate, filters.dateTo));
+    conditions.push(`(event_date <= '${filters.dateTo.toISOString()}'::timestamptz OR event_date IS NULL)`);
   }
 
   if (filters.query) {
-    conditions.push(
-      sql`(${events.title} ILIKE ${"%" + filters.query + "%"} OR ${events.description} ILIKE ${"%" + filters.query + "%"})`
-    );
+    const q = filters.query.replace(/'/g, "''");
+    conditions.push(`(title ILIKE '%${q}%' OR description ILIKE '%${q}%')`);
   }
 
-  // Exclude expired events
-  conditions.push(
-    sql`(${events.expiresAt} IS NULL OR ${events.expiresAt} > NOW())`
+  if (!filters.dateFrom && !filters.dateTo) {
+    conditions.push(`(expires_at IS NULL OR expires_at > NOW())`);
+  }
+
+  const where = conditions.join(" AND ");
+  const limit = filters.limit ?? 10;
+
+  const result = await db.execute(
+    sql.raw(`SELECT * FROM events WHERE ${where} ORDER BY event_date DESC NULLS LAST LIMIT ${limit}`)
   );
 
-  return db
-    .select()
-    .from(events)
-    .where(and(...conditions))
-    .orderBy(desc(events.eventDate))
-    .limit(filters.limit ?? 10);
+  return result as unknown as Event[];
 }
 
 export async function expireOldEvents(): Promise<number> {

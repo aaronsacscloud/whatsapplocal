@@ -13,7 +13,10 @@ export async function searchFromClassification(
     city,
     neighborhood: classification.neighborhood ?? undefined,
     category: classification.category ?? undefined,
-    query: classification.query ?? undefined,
+    // Only use query for specific searches (not generic questions)
+    query: classification.query && !isGenericQuery(classification.query)
+      ? classification.query
+      : undefined,
     limit: 10,
   };
 
@@ -23,10 +26,12 @@ export async function searchFromClassification(
     filters.dateFrom = dateFrom;
     filters.dateTo = dateTo;
   } else {
-    // Default: events from now until end of next week
-    filters.dateFrom = new Date();
-    const nextWeek = new Date();
-    nextWeek.setDate(nextWeek.getDate() + 7);
+    // Default: events from start of today (UTC) until end of next week
+    const now = new Date();
+    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    filters.dateFrom = todayUtc;
+    const nextWeek = new Date(todayUtc);
+    nextWeek.setUTCDate(nextWeek.getUTCDate() + 7);
     filters.dateTo = nextWeek;
   }
 
@@ -38,15 +43,16 @@ function parseDateRange(dateStr: string): {
   dateTo: Date;
 } {
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Use UTC to match DB timestamps
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
   const lower = dateStr.toLowerCase().trim();
 
   if (lower === "hoy" || lower === "today" || lower.includes("esta noche")) {
     return {
-      dateFrom: now,
+      dateFrom: today, // Start of day, not current time
       dateTo: new Date(today.getTime() + 24 * 60 * 60 * 1000),
     };
   }
@@ -63,19 +69,19 @@ function parseDateRange(dateStr: string): {
     lower.includes("finde") ||
     lower.includes("weekend")
   ) {
-    const dayOfWeek = now.getDay();
+    const dayOfWeek = now.getUTCDay();
     const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
     const saturday = new Date(today);
-    saturday.setDate(today.getDate() + daysUntilSaturday);
+    saturday.setUTCDate(today.getUTCDate() + daysUntilSaturday);
     const monday = new Date(saturday);
-    monday.setDate(saturday.getDate() + 2);
+    monday.setUTCDate(saturday.getUTCDate() + 2);
     return { dateFrom: saturday, dateTo: monday };
   }
 
   if (lower.includes("esta semana") || lower.includes("this week")) {
     const endOfWeek = new Date(today);
-    endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
-    return { dateFrom: now, dateTo: endOfWeek };
+    endOfWeek.setUTCDate(today.getUTCDate() + (7 - today.getUTCDay()));
+    return { dateFrom: today, dateTo: endOfWeek };
   }
 
   // Try parsing as ISO date
@@ -90,4 +96,18 @@ function parseDateRange(dateStr: string): {
   const nextWeek = new Date();
   nextWeek.setDate(nextWeek.getDate() + 7);
   return { dateFrom: now, dateTo: nextWeek };
+}
+
+const GENERIC_PATTERNS = [
+  /^que hay/i,
+  /^que hacer/i,
+  /^que se puede/i,
+  /^que pasa/i,
+  /^donde ir/i,
+  /^recomien/i,
+  /^algo para/i,
+];
+
+function isGenericQuery(query: string): boolean {
+  return GENERIC_PATTERNS.some((p) => p.test(query.trim()));
 }
