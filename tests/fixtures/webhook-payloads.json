@@ -1,0 +1,73 @@
+{
+  "validTextMessage": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "123456789",
+        "changes": [
+          {
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15551234567",
+                "phone_number_id": "test-phone-id"
+              },
+              "contacts": [
+                {
+                  "profile": { "name": "Test User" },
+                  "wa_id": "5491112345678"
+                }
+              ],
+              "messages": [
+                {
+                  "from": "5491112345678",
+                  "id": "wamid.test123",
+                  "timestamp": "1680000000",
+                  "type": "text",
+                  "text": { "body": "que hay esta noche?" }
+                }
+              ]
+            },
+            "field": "messages"
+          }
+        ]
+      }
+    ]
+  },
+  "forwardedMessage": {
+    "object": "whatsapp_business_account",
+    "entry": [
+      {
+        "id": "123456789",
+        "changes": [
+          {
+            "value": {
+              "messaging_product": "whatsapp",
+              "metadata": {
+                "display_phone_number": "15551234567",
+                "phone_number_id": "test-phone-id"
+              },
+              "contacts": [
+                {
+                  "profile": { "name": "Test User" },
+                  "wa_id": "5491112345678"
+                }
+              ],
+              "messages": [
+                {
+                  "from": "5491112345678",
+                  "id": "wamid.fwd456",
+                  "timestamp": "1680000000",
+                  "type": "text",
+                  "text": { "body": "Jazz en vivo sabado 21hs en Bar El Poblado" },
+                  "context": { "from": "5491198765432", "id": "wamid.original" }
+                }
+              ]
+            },
+            "field": "messages"
+          }
+        ]
+      }
+    ]
+  }
+}

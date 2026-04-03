@@ -1,0 +1,22 @@
+[
+  {
+    "text": "Este sábado 5 de abril, Jazz en vivo en Bar El Poblado! 21hs, entrada libre con consumición mínima. Av. Santa Fe 3200, Palermo.",
+    "expectedEvent": true,
+    "expectedConfidence": 0.9
+  },
+  {
+    "text": "jajajaja mira este video que gracioso",
+    "expectedEvent": false,
+    "expectedConfidence": 0.1
+  },
+  {
+    "text": "Hoy hay descuento en todas las pizzas en La Esquina! Solo por hoy 2x1",
+    "expectedEvent": true,
+    "expectedConfidence": 0.7
+  },
+  {
+    "text": "Buen día a todos, que tengan una excelente semana!",
+    "expectedEvent": false,
+    "expectedConfidence": 0.05
+  }
+]
