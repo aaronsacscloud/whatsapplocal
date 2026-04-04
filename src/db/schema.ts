@@ -17,6 +17,11 @@ export const categoryEnum = pgEnum("category", [
   "culture",
   "sports",
   "popup",
+  "wellness",
+  "tour",
+  "class",
+  "adventure",
+  "wine",
   "other",
 ]);
 
@@ -25,6 +30,8 @@ export const sourceTypeEnum = pgEnum("source_type", [
   "instagram",
   "tiktok",
   "user_forwarded",
+  "website",
+  "platform",
 ]);
 
 export const pollPriorityEnum = pgEnum("poll_priority", [

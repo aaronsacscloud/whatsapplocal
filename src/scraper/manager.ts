@@ -1,6 +1,7 @@
 import { scrapeSource } from "./apify.js";
 import { normalizeApifyPosts } from "./normalizer.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
+import { scrapeEventbrite, scrapeBandsintown } from "./platform-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
 import {
   getActiveSources,
@@ -8,6 +9,7 @@ import {
   recordScrapeFailure,
 } from "./health.js";
 import { upsertEvent } from "../events/repository.js";
+import type { NewEvent } from "../db/schema.js";
 import { extractEvent } from "../llm/extractor.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
@@ -65,8 +67,53 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
     logger.info("Skipping Apify phase (no API token)");
   }
 
+  // Phase 3: Platform scrapers (Eventbrite, Bandsintown - free)
+  logger.info("Starting platform scraper phase");
+  const platformEvents = await runPlatformScrapers();
+  const { unique: platUnique, duplicates: platDups } =
+    await deduplicateEvents(platformEvents);
+
+  for (const event of platUnique) {
+    await upsertEvent(event);
+  }
+
+  result.sourcesProcessed += 2;
+  result.eventsInserted += platUnique.length;
+  result.duplicatesSkipped += platDups;
+
+  logger.info(
+    { platformEvents: platformEvents.length, inserted: platUnique.length },
+    "Platform scraper phase complete"
+  );
+
   logger.info(result, "Full scrape cycle complete");
   return result;
+}
+
+/**
+ * Scrape platforms (Eventbrite, Bandsintown)
+ */
+async function runPlatformScrapers(): Promise<NewEvent[]> {
+  const logger = getLogger();
+  const allEvents: NewEvent[] = [];
+
+  try {
+    const ebEvents = await scrapeEventbrite();
+    allEvents.push(...ebEvents);
+    logger.info({ count: ebEvents.length }, "Eventbrite scraped");
+  } catch (error) {
+    logger.error({ error }, "Eventbrite scraper failed");
+  }
+
+  try {
+    const bitEvents = await scrapeBandsintown();
+    allEvents.push(...bitEvents);
+    logger.info({ count: bitEvents.length }, "Bandsintown scraped");
+  } catch (error) {
+    logger.error({ error }, "Bandsintown scraper failed");
+  }
+
+  return allEvents;
 }
 
 /**

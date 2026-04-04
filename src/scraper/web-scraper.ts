@@ -201,28 +201,34 @@ function extractDateFromUrl(url: string): string | null {
 
 function mapCategory(
   raw: string
-): "music" | "food" | "nightlife" | "culture" | "sports" | "popup" | "other" {
+): string {
   const lower = raw.toLowerCase();
   if (
-    lower.includes("music") ||
-    lower.includes("jazz") ||
-    lower.includes("blues") ||
-    lower.includes("cumbia") ||
-    lower.includes("salsa") ||
-    lower.includes("acoustic") ||
-    lower.includes("dj")
+    lower.includes("music") || lower.includes("jazz") || lower.includes("blues") ||
+    lower.includes("cumbia") || lower.includes("salsa") || lower.includes("acoustic") ||
+    lower.includes("dj") || lower.includes("concert") || lower.includes("concierto")
   )
     return "music";
-  if (lower.includes("food") || lower.includes("gastro") || lower.includes("cocina"))
+  if (lower.includes("food") || lower.includes("gastro") || lower.includes("cocina") || lower.includes("brunch"))
     return "food";
-  if (lower.includes("theater") || lower.includes("teatro") || lower.includes("art") || lower.includes("dance"))
+  if (lower.includes("theater") || lower.includes("teatro") || lower.includes("art") || lower.includes("dance") || lower.includes("gallery"))
     return "culture";
-  if (lower.includes("sport") || lower.includes("deporte"))
+  if (lower.includes("sport") || lower.includes("deporte") || lower.includes("golf") || lower.includes("tennis") || lower.includes("yoga") || lower.includes("crossfit"))
     return "sports";
   if (lower.includes("festival") || lower.includes("feria") || lower.includes("popup") || lower.includes("pop-up"))
     return "popup";
   if (lower.includes("night") || lower.includes("party") || lower.includes("fiesta"))
     return "nightlife";
+  if (lower.includes("spa") || lower.includes("wellness") || lower.includes("temazcal") || lower.includes("meditation") || lower.includes("healing"))
+    return "wellness";
+  if (lower.includes("tour") || lower.includes("recorrido") || lower.includes("walk") || lower.includes("excursion"))
+    return "tour";
+  if (lower.includes("class") || lower.includes("taller") || lower.includes("workshop") || lower.includes("curso") || lower.includes("lesson"))
+    return "class";
+  if (lower.includes("balloon") || lower.includes("globo") || lower.includes("horseback") || lower.includes("cabalgata") || lower.includes("hiking") || lower.includes("adventure"))
+    return "adventure";
+  if (lower.includes("wine") || lower.includes("vino") || lower.includes("cata") || lower.includes("mezcal") || lower.includes("tasting"))
+    return "wine";
   return "other";
 }
 

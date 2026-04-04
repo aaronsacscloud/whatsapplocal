@@ -25,7 +25,7 @@ Para "date", interpreta expresiones como:
 - "este finde" / "este fin de semana" → proximo sabado y domingo
 - "esta semana" → desde hoy hasta el domingo
 
-Para "category", usa: music, food, nightlife, culture, sports, popup, other`;
+Para "category", usa: music, food, nightlife, culture, sports, popup, wellness (spa/yoga/temazcal), tour (tours/recorridos), class (clases/talleres), adventure (globo/cabalgata/outdoor), wine (vino/mezcal/cata), other`;
 
 export const EXTRACTOR_SYSTEM = `Eres un extractor de eventos. Analiza el texto y extrae informacion de eventos.
 
