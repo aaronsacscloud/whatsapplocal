@@ -15,10 +15,41 @@ import { validateAndSanitize } from "./validator.js";
 import { crossSourceDedup } from "./smart-dedup.js";
 import { recalculateAllFreshness } from "./freshness.js";
 import type { NewEvent } from "../db/schema.js";
+import { scrapeLogs } from "../db/schema.js";
+import { getDb } from "../db/index.js";
 import type { ApifyFacebookPost } from "./apify.js";
 import { extractEvent } from "../llm/extractor.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
+
+/**
+ * Log a scrape run to the scrape_logs table.
+ */
+async function logScrapeRun(
+  trigger: string,
+  startedAt: Date,
+  result: ScrapeResult
+): Promise<void> {
+  try {
+    const db = getDb();
+    await db.insert(scrapeLogs).values({
+      startedAt,
+      completedAt: new Date(),
+      sourcesProcessed: result.sourcesProcessed,
+      eventsInserted: result.eventsInserted,
+      eventsRejected: result.eventsRejected,
+      duplicatesMerged: result.duplicatesMerged,
+      errors: result.errors,
+      trigger,
+      details: {
+        duplicatesSkipped: result.duplicatesSkipped,
+      },
+    });
+  } catch (error) {
+    const logger = getLogger();
+    logger.error({ error }, "Failed to log scrape run");
+  }
+}
 
 export interface ScrapeResult {
   sourcesProcessed: number;
@@ -32,9 +63,10 @@ export interface ScrapeResult {
 /**
  * Run all scrapers: web aggregators first (free), then Apify for Facebook pages.
  */
-export async function runScrapeAll(): Promise<ScrapeResult> {
+export async function runScrapeAll(trigger = "manual"): Promise<ScrapeResult> {
   const logger = getLogger();
   const config = getConfig();
+  const scrapeStartedAt = new Date();
 
   const result: ScrapeResult = {
     sourcesProcessed: 0,
@@ -117,6 +149,7 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
   }
 
   logger.info(result, "Full scrape cycle complete");
+  await logScrapeRun(trigger, scrapeStartedAt, result);
   return result;
 }
 
@@ -176,9 +209,10 @@ async function runWebScrapers(): Promise<ReturnType<typeof scrapeSanMiguelLive> 
  * Smart scrape: run free scrapers always, only scrape Facebook if we need more events.
  * Also cleans up old events.
  */
-export async function runSmartScrape(): Promise<ScrapeResult> {
+export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
   const logger = getLogger();
   const config = getConfig();
+  const scrapeStartedAt = new Date();
 
   const result: ScrapeResult = {
     sourcesProcessed: 0,
@@ -294,6 +328,7 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
     `Scraped ${result.sourcesProcessed} sources, found ${result.eventsInserted} new events, merged ${result.duplicatesMerged} duplicates, rejected ${result.eventsRejected}`
   );
 
+  await logScrapeRun(trigger, scrapeStartedAt, result);
   return result;
 }
 

@@ -1,7 +1,16 @@
 import { Router, json } from "express";
-import { eq, desc, sql, and, gte, lte, lt, count } from "drizzle-orm";
+import { eq, desc, sql, and, gte, lte, lt, count, asc, isNull } from "drizzle-orm";
 import { getDb } from "../db/index.js";
-import { sources, events, users, analytics } from "../db/schema.js";
+import {
+  sources,
+  events,
+  users,
+  analytics,
+  conversations,
+  userAlerts,
+  alertNotifications,
+  scrapeLogs,
+} from "../db/schema.js";
 import { getDashboardHTML } from "./dashboard.js";
 import { getQRPageHTML } from "./qr.js";
 import { runScrapeAll } from "../scraper/manager.js";
@@ -20,7 +29,8 @@ export function createAdminRouter(): Router {
     res.type("html").send(getDashboardHTML());
   });
 
-  // GET /admin/api/stats - Dashboard aggregate stats
+  // ─── Overview Stats ──────────────────────────────────────────
+
   router.get("/admin/api/stats", async (_req, res) => {
     try {
       const db = getDb();
@@ -30,6 +40,10 @@ export function createAdminRouter(): Router {
 
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
+
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - 7);
+      weekStart.setHours(0, 0, 0, 0);
 
       const [eventCountResult] = await db
         .select({ value: count() })
@@ -54,10 +68,20 @@ export function createAdminRouter(): Router {
           )
         );
 
+      const [eventsWeekResult] = await db
+        .select({ value: count() })
+        .from(events)
+        .where(gte(events.eventDate, weekStart));
+
       const [activeTodayResult] = await db
         .select({ value: count() })
         .from(users)
         .where(gte(users.lastActiveAt, todayStart));
+
+      const [activeWeekResult] = await db
+        .select({ value: count() })
+        .from(users)
+        .where(gte(users.lastActiveAt, weekStart));
 
       const [queriesResult] = await db
         .select({
@@ -65,6 +89,48 @@ export function createAdminRouter(): Router {
           totalForwards: sql<number>`COALESCE(SUM(${users.forwardCount}), 0)`,
         })
         .from(users);
+
+      // Messages today
+      const [messagesTodayResult] = await db
+        .select({ value: count() })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.role, "user"),
+            gte(conversations.createdAt, todayStart)
+          )
+        );
+
+      // Total messages
+      const [totalMessagesResult] = await db
+        .select({ value: count() })
+        .from(conversations)
+        .where(eq(conversations.role, "user"));
+
+      // Bot response rate (answered vs unknown)
+      const [answeredResult] = await db
+        .select({ value: count() })
+        .from(analytics)
+        .where(sql`${analytics.intent} != 'unknown' AND ${analytics.intent} IS NOT NULL`);
+
+      const [unknownResult] = await db
+        .select({ value: count() })
+        .from(analytics)
+        .where(eq(analytics.intent, "unknown"));
+
+      // Average response time
+      const [avgResponseResult] = await db
+        .select({
+          avgMs: sql<number>`COALESCE(AVG(${analytics.responseTimeMs}), 0)`,
+        })
+        .from(analytics)
+        .where(sql`${analytics.responseTimeMs} IS NOT NULL`);
+
+      // Subscribers (digest enabled)
+      const [subscribersResult] = await db
+        .select({ value: count() })
+        .from(users)
+        .where(eq(users.digestEnabled, true));
 
       const categoryBreakdown = await db
         .select({
@@ -74,14 +140,26 @@ export function createAdminRouter(): Router {
         .from(events)
         .groupBy(events.category);
 
+      const answered = Number(answeredResult.value) || 0;
+      const unknown = Number(unknownResult.value) || 0;
+      const totalIntent = answered + unknown;
+      const responseRate = totalIntent > 0 ? Math.round((answered / totalIntent) * 100) : 100;
+
       res.json({
         totalEvents: eventCountResult.value,
         activeSources: activeSourcesResult.value,
         totalUsers: usersCountResult.value,
         eventsToday: eventsTodayResult.value,
+        eventsWeek: eventsWeekResult.value,
         activeToday: activeTodayResult.value,
+        activeWeek: activeWeekResult.value,
         totalQueries: queriesResult.totalQueries,
         totalForwards: queriesResult.totalForwards,
+        messagesToday: messagesTodayResult.value,
+        totalMessages: totalMessagesResult.value,
+        responseRate,
+        avgResponseMs: Math.round(Number(avgResponseResult.avgMs) || 0),
+        subscribers: subscribersResult.value,
         eventsByCategory: categoryBreakdown,
       });
     } catch (error) {
@@ -91,7 +169,184 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // GET /admin/api/sources - List all sources
+  // ─── Users ──────────────────────────────────────────────────
+
+  router.get("/admin/api/users", async (req, res) => {
+    try {
+      const db = getDb();
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const offset = (page - 1) * limit;
+      const sort = (req.query.sort as string) || "last_active";
+      const lang = req.query.language as string;
+      const tourist = req.query.tourist as string;
+      const onboarding = req.query.onboarding as string;
+
+      const conditions = [];
+
+      if (lang && (lang === "es" || lang === "en")) {
+        conditions.push(eq(users.language, lang));
+      }
+
+      if (tourist === "true") {
+        conditions.push(eq(users.isTourist, true));
+      } else if (tourist === "false") {
+        conditions.push(eq(users.isTourist, false));
+      }
+
+      if (onboarding === "true") {
+        conditions.push(eq(users.onboardingComplete, true));
+      } else if (onboarding === "false") {
+        conditions.push(eq(users.onboardingComplete, false));
+      }
+
+      const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+      let orderBy;
+      switch (sort) {
+        case "queries":
+          orderBy = desc(users.queryCount);
+          break;
+        case "first_seen":
+          orderBy = desc(users.firstSeenAt);
+          break;
+        default:
+          orderBy = desc(users.lastActiveAt);
+      }
+
+      const [totalResult] = await db
+        .select({ value: count() })
+        .from(users)
+        .where(where);
+
+      const userList = await db
+        .select()
+        .from(users)
+        .where(where)
+        .orderBy(orderBy)
+        .limit(limit)
+        .offset(offset);
+
+      res.json({
+        users: userList,
+        total: totalResult.value,
+        page,
+        limit,
+        totalPages: Math.ceil(totalResult.value / limit),
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin users query failed");
+      res.status(500).json({ error: "Failed to load users" });
+    }
+  });
+
+  // GET /admin/api/users/:phoneHash/conversations
+  router.get("/admin/api/users/:phoneHash/conversations", async (req, res) => {
+    try {
+      const { phoneHash } = req.params;
+      const db = getDb();
+
+      const convos = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.phoneHash, phoneHash))
+        .orderBy(desc(conversations.createdAt))
+        .limit(10);
+
+      res.json(convos);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin user conversations query failed");
+      res.status(500).json({ error: "Failed to load conversations" });
+    }
+  });
+
+  // ─── Conversations / Messages ──────────────────────────────
+
+  router.get("/admin/api/conversations/recent", async (req, res) => {
+    try {
+      const db = getDb();
+      const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
+      const intentFilter = req.query.intent as string;
+
+      // Get recent user messages with their bot responses
+      const conditions = [eq(conversations.role, "user")];
+      if (intentFilter) {
+        conditions.push(eq(conversations.intent, intentFilter));
+      }
+
+      const recentMessages = await db
+        .select()
+        .from(conversations)
+        .where(and(...conditions))
+        .orderBy(desc(conversations.createdAt))
+        .limit(limit);
+
+      // For each user message, try to find the bot response
+      const messagesWithResponses = await Promise.all(
+        recentMessages.map(async (msg) => {
+          const [botResponse] = await db
+            .select()
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.phoneHash, msg.phoneHash),
+                eq(conversations.role, "assistant"),
+                gte(conversations.createdAt, msg.createdAt!)
+              )
+            )
+            .orderBy(asc(conversations.createdAt))
+            .limit(1);
+
+          return {
+            ...msg,
+            botResponse: botResponse?.content || null,
+          };
+        })
+      );
+
+      res.json(messagesWithResponses);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin recent conversations query failed");
+      res.status(500).json({ error: "Failed to load conversations" });
+    }
+  });
+
+  // GET /admin/api/conversations/unanswered — messages where intent was unknown
+  router.get("/admin/api/conversations/unanswered", async (_req, res) => {
+    try {
+      const db = getDb();
+
+      const unanswered = await db
+        .select({
+          id: conversations.id,
+          phoneHash: conversations.phoneHash,
+          content: conversations.content,
+          intent: conversations.intent,
+          createdAt: conversations.createdAt,
+        })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.role, "user"),
+            eq(conversations.intent, "unknown")
+          )
+        )
+        .orderBy(desc(conversations.createdAt))
+        .limit(50);
+
+      res.json(unanswered);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin unanswered query failed");
+      res.status(500).json({ error: "Failed to load unanswered messages" });
+    }
+  });
+
+  // ─── Sources ──────────────────────────────────────────────────
+
   router.get("/admin/api/sources", async (_req, res) => {
     try {
       const db = getDb();
@@ -108,7 +363,6 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // POST /admin/api/sources - Add a new source
   router.post("/admin/api/sources", async (req, res) => {
     try {
       const { name, url, type, pollPriority } = req.body;
@@ -123,6 +377,8 @@ export function createAdminRouter(): Router {
         "instagram",
         "tiktok",
         "user_forwarded",
+        "website",
+        "platform",
       ];
       if (!validTypes.includes(type)) {
         res.status(400).json({ error: "Invalid source type" });
@@ -141,7 +397,7 @@ export function createAdminRouter(): Router {
         .values({
           name,
           url,
-          type: type as "facebook_page" | "instagram" | "tiktok" | "user_forwarded",
+          type: type as "facebook_page" | "instagram" | "tiktok" | "user_forwarded" | "website" | "platform",
           pollPriority: (pollPriority || "medium") as "high" | "medium" | "low",
         })
         .returning();
@@ -154,7 +410,6 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // PUT /admin/api/sources/:id - Update a source
   router.put("/admin/api/sources/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -206,7 +461,6 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // DELETE /admin/api/sources/:id - Delete a source
   router.delete("/admin/api/sources/:id", async (req, res) => {
     try {
       const { id } = req.params;
@@ -230,7 +484,8 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // GET /admin/api/events - List events with pagination and filters
+  // ─── Events ──────────────────────────────────────────────────
+
   router.get("/admin/api/events", async (req, res) => {
     try {
       const db = getDb();
@@ -242,30 +497,17 @@ export function createAdminRouter(): Router {
 
       // Category filter
       if (req.query.category && typeof req.query.category === "string") {
-        const validCategories = [
-          "music",
-          "food",
-          "nightlife",
-          "culture",
-          "sports",
-          "popup",
-          "other",
-        ];
-        if (validCategories.includes(req.query.category)) {
-          conditions.push(
-            eq(
-              events.category,
-              req.query.category as
-                | "music"
-                | "food"
-                | "nightlife"
-                | "culture"
-                | "sports"
-                | "popup"
-                | "other"
-            )
-          );
-        }
+        conditions.push(eq(events.category, req.query.category as any));
+      }
+
+      // Content type filter
+      if (req.query.content_type && typeof req.query.content_type === "string") {
+        conditions.push(eq(events.contentType, req.query.content_type));
+      }
+
+      // Source type filter
+      if (req.query.source_type && typeof req.query.source_type === "string") {
+        conditions.push(eq(events.sourceType, req.query.source_type as any));
       }
 
       // City filter
@@ -323,12 +565,117 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // POST /admin/api/scrape - Trigger manual scrape
+  // POST /admin/api/events/manual — manually add an event
+  router.post("/admin/api/events/manual", async (req, res) => {
+    try {
+      const {
+        title,
+        venueName,
+        venueAddress,
+        city,
+        eventDate,
+        category,
+        contentType,
+        price,
+        description,
+        imageUrl,
+      } = req.body;
+
+      if (!title || !city) {
+        res.status(400).json({ error: "title and city are required" });
+        return;
+      }
+
+      const db = getDb();
+      const [newEvent] = await db
+        .insert(events)
+        .values({
+          title,
+          venueName: venueName || null,
+          venueAddress: venueAddress || null,
+          city,
+          eventDate: eventDate ? new Date(eventDate) : null,
+          category: category || "other",
+          contentType: contentType || "event",
+          price: price || null,
+          description: description || null,
+          imageUrl: imageUrl || null,
+          sourceType: "user_forwarded",
+          confidence: 1.0,
+          scrapedAt: new Date(),
+        })
+        .returning();
+
+      res.status(201).json(newEvent);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin manual event add failed");
+      res.status(500).json({ error: "Failed to add event" });
+    }
+  });
+
+  // DELETE /admin/api/events — bulk delete events
+  router.delete("/admin/api/events", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: "ids array is required" });
+        return;
+      }
+
+      const db = getDb();
+      let deletedCount = 0;
+      for (const id of ids) {
+        const [deleted] = await db
+          .delete(events)
+          .where(eq(events.id, id))
+          .returning();
+        if (deleted) deletedCount++;
+      }
+
+      res.json({ success: true, deleted: deletedCount });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin bulk delete events failed");
+      res.status(500).json({ error: "Failed to delete events" });
+    }
+  });
+
+  // PUT /admin/api/events/category — bulk update category
+  router.put("/admin/api/events/category", async (req, res) => {
+    try {
+      const { ids, category } = req.body;
+      if (!ids || !Array.isArray(ids) || !category) {
+        res.status(400).json({ error: "ids array and category are required" });
+        return;
+      }
+
+      const db = getDb();
+      let updatedCount = 0;
+      for (const id of ids) {
+        const [updated] = await db
+          .update(events)
+          .set({ category })
+          .where(eq(events.id, id))
+          .returning();
+        if (updated) updatedCount++;
+      }
+
+      res.json({ success: true, updated: updatedCount });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin bulk update category failed");
+      res.status(500).json({ error: "Failed to update categories" });
+    }
+  });
+
+  // ─── Scraping ──────────────────────────────────────────────────
+
   router.post("/admin/api/scrape", async (_req, res) => {
     const logger = getLogger();
     try {
       logger.info("Manual scrape triggered from admin dashboard");
-      const result = await runScrapeAll();
+      const result = await runScrapeAll("admin_manual");
       res.json(result);
     } catch (error) {
       logger.error({ error }, "Manual scrape failed");
@@ -336,9 +683,50 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // ─── Analytics Endpoints ───────────────────────────────────────────
+  router.post("/admin/api/scrape/run", async (_req, res) => {
+    const logger = getLogger();
+    try {
+      logger.info("Full scrape triggered from admin dashboard");
+      const result = await runScrapeAll("admin_full");
+      res.json(result);
+    } catch (error) {
+      logger.error({ error }, "Full scrape failed");
+      res.status(500).json({ error: "Full scrape failed" });
+    }
+  });
 
-  // GET /admin/api/analytics/top-queries — Top 20 most common queries
+  router.post("/admin/api/quality/run", async (_req, res) => {
+    const logger = getLogger();
+    try {
+      const { recalculateAllFreshness } = await import("../scraper/freshness.js");
+      await recalculateAllFreshness();
+      res.json({ success: true, message: "Quality check complete" });
+    } catch (error) {
+      logger.error({ error }, "Quality check failed");
+      res.status(500).json({ error: "Quality check failed" });
+    }
+  });
+
+  // GET /admin/api/scrape-log — last 10 scrape runs
+  router.get("/admin/api/scrape-log", async (_req, res) => {
+    try {
+      const db = getDb();
+      const logs = await db
+        .select()
+        .from(scrapeLogs)
+        .orderBy(desc(scrapeLogs.startedAt))
+        .limit(10);
+
+      res.json(logs);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin scrape log query failed");
+      res.status(500).json({ error: "Failed to load scrape logs" });
+    }
+  });
+
+  // ─── Analytics ──────────────────────────────────────────────
+
   router.get("/admin/api/analytics/top-queries", async (_req, res) => {
     try {
       const db = getDb();
@@ -362,7 +750,6 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // GET /admin/api/analytics/intents — Intent distribution
   router.get("/admin/api/analytics/intents", async (_req, res) => {
     try {
       const db = getDb();
@@ -383,7 +770,6 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // GET /admin/api/analytics/daily — Queries per day (last 30 days)
   router.get("/admin/api/analytics/daily", async (_req, res) => {
     try {
       const db = getDb();
@@ -407,9 +793,59 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // ─── Retention & Engagement Metrics ──────────────────────────
+  router.get("/admin/api/analytics/hourly", async (_req, res) => {
+    try {
+      const db = getDb();
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  // GET /admin/api/metrics/retention — DAU, WAU, MAU, retention rate
+      const hourlyData = await db
+        .select({
+          hour: sql<number>`EXTRACT(HOUR FROM ${analytics.createdAt})`.as("hour"),
+          count: count(),
+        })
+        .from(analytics)
+        .where(gte(analytics.createdAt, sevenDaysAgo))
+        .groupBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`)
+        .orderBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`);
+
+      const hourMap = new Map(hourlyData.map((h) => [Number(h.hour), Number(h.count)]));
+      const popularHours = Array.from({ length: 24 }, (_, i) => ({
+        hour: i,
+        count: hourMap.get(i) || 0,
+      }));
+
+      res.json(popularHours);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Analytics hourly failed");
+      res.status(500).json({ error: "Failed to load hourly analytics" });
+    }
+  });
+
+  router.get("/admin/api/analytics/categories", async (_req, res) => {
+    try {
+      const db = getDb();
+      const results = await db
+        .select({
+          category: analytics.category,
+          count: count(),
+        })
+        .from(analytics)
+        .where(sql`${analytics.category} IS NOT NULL`)
+        .groupBy(analytics.category)
+        .orderBy(desc(count()))
+        .limit(20);
+
+      res.json(results);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Analytics categories failed");
+      res.status(500).json({ error: "Failed to load category analytics" });
+    }
+  });
+
+  // ─── Retention & Engagement ──────────────────────────────
+
   router.get("/admin/api/metrics/retention", async (_req, res) => {
     try {
       const db = getDb();
@@ -424,25 +860,21 @@ export function createAdminRouter(): Router {
       const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-      // DAU: distinct users who queried today
       const [dauResult] = await db
         .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
         .from(analytics)
         .where(gte(analytics.createdAt, todayStart));
 
-      // WAU: distinct users in last 7 days
       const [wauResult] = await db
         .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
         .from(analytics)
         .where(gte(analytics.createdAt, sevenDaysAgo));
 
-      // MAU: distinct users in last 30 days
       const [mauResult] = await db
         .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
         .from(analytics)
         .where(gte(analytics.createdAt, thirtyDaysAgo));
 
-      // Retention: users who queried today AND also queried yesterday
       const [retentionResult] = await db
         .select({ value: sql<number>`COUNT(DISTINCT t.phone_hash)` })
         .from(
@@ -459,7 +891,6 @@ export function createAdminRouter(): Router {
           ) y ON t.phone_hash = y.phone_hash`
         );
 
-      // Daily retention for last 7 days
       const retentionTrend = await db
         .select({
           date: sql<string>`DATE(${analytics.createdAt})`.as("date"),
@@ -494,13 +925,11 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // GET /admin/api/metrics/engagement — avg queries, popular hours, response times
   router.get("/admin/api/metrics/engagement", async (_req, res) => {
     try {
       const db = getDb();
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-      // Avg queries per user (last 7 days)
       const [avgResult] = await db
         .select({
           totalQueries: sql<number>`COUNT(*)`,
@@ -513,18 +942,6 @@ export function createAdminRouter(): Router {
       const uniqueUsers = Number(avgResult.uniqueUsers) || 1;
       const avgQueriesPerUser = Math.round((totalQueries / uniqueUsers) * 10) / 10;
 
-      // Popular hours (group by hour of day)
-      const hourlyData = await db
-        .select({
-          hour: sql<number>`EXTRACT(HOUR FROM ${analytics.createdAt})`.as("hour"),
-          count: count(),
-        })
-        .from(analytics)
-        .where(gte(analytics.createdAt, sevenDaysAgo))
-        .groupBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`)
-        .orderBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`);
-
-      // Avg response time
       const [responseTimeResult] = await db
         .select({
           avgMs: sql<number>`COALESCE(AVG(${analytics.responseTimeMs}), 0)`,
@@ -539,7 +956,6 @@ export function createAdminRouter(): Router {
           )
         );
 
-      // Response time trend (daily avg)
       const responseTimeTrend = await db
         .select({
           date: sql<string>`DATE(${analytics.createdAt})`.as("date"),
@@ -555,18 +971,10 @@ export function createAdminRouter(): Router {
         .groupBy(sql`DATE(${analytics.createdAt})`)
         .orderBy(sql`DATE(${analytics.createdAt})`);
 
-      // Build full 24-hour heatmap data
-      const hourMap = new Map(hourlyData.map((h) => [Number(h.hour), Number(h.count)]));
-      const popularHours = Array.from({ length: 24 }, (_, i) => ({
-        hour: i,
-        count: hourMap.get(i) || 0,
-      }));
-
       res.json({
         avgQueriesPerUser,
         totalQueries,
         uniqueUsers,
-        popularHours,
         responseTime: {
           avgMs: Math.round(Number(responseTimeResult.avgMs) || 0),
           p50Ms: Math.round(Number(responseTimeResult.p50) || 0),
@@ -581,22 +989,83 @@ export function createAdminRouter(): Router {
     }
   });
 
-  // ─── Data Quality ��─────────────────────────────────────────
+  // ─── Alerts & Subscriptions ────────────────────────────────
 
-  // GET /admin/api/quality — Data quality metrics
+  router.get("/admin/api/alerts", async (_req, res) => {
+    try {
+      const db = getDb();
+
+      const alerts = await db
+        .select()
+        .from(userAlerts)
+        .orderBy(desc(userAlerts.createdAt))
+        .limit(100);
+
+      const [totalResult] = await db
+        .select({ value: count() })
+        .from(userAlerts)
+        .where(eq(userAlerts.active, true));
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - 7);
+      weekStart.setHours(0, 0, 0, 0);
+
+      const [sentTodayResult] = await db
+        .select({ value: count() })
+        .from(alertNotifications)
+        .where(gte(alertNotifications.notifiedAt, todayStart));
+
+      const [sentWeekResult] = await db
+        .select({ value: count() })
+        .from(alertNotifications)
+        .where(gte(alertNotifications.notifiedAt, weekStart));
+
+      res.json({
+        alerts,
+        totalActive: totalResult.value,
+        sentToday: sentTodayResult.value,
+        sentWeek: sentWeekResult.value,
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin alerts query failed");
+      res.status(500).json({ error: "Failed to load alerts" });
+    }
+  });
+
+  // ─── Settings ──────────────────────────────────────────────
+
+  router.get("/admin/api/settings", async (_req, res) => {
+    try {
+      const config = getConfig();
+      res.json({
+        DEFAULT_CITY: config.DEFAULT_CITY,
+        NODE_ENV: config.NODE_ENV,
+        LOG_LEVEL: config.LOG_LEVEL,
+        PORT: config.PORT,
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin settings query failed");
+      res.status(500).json({ error: "Failed to load settings" });
+    }
+  });
+
+  // ─── Data Quality ──────────────────────────────────────────
+
   router.get("/admin/api/quality", async (_req, res) => {
     try {
       const db = getDb();
       const config = getConfig();
-      const logger = getLogger();
 
-      // SMA timezone offset
       const SMA_TZ = -6;
       const now = new Date();
       const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
       const sma = new Date(smaMs);
 
-      // Events per day for next 7 days
       const eventsPerDay: Array<{ date: string; count: number }> = [];
       for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
         const dayStart = new Date(
@@ -623,7 +1092,6 @@ export function createAdminRouter(): Router {
         });
       }
 
-      // Completeness metrics for future events
       const futureStart = new Date(
         Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) -
           SMA_TZ * 3600000
@@ -647,7 +1115,6 @@ export function createAdminRouter(): Router {
 
       const c = completenessResult[0];
 
-      // Source quality ranking (top 10 sources by quality_score)
       const sourceRanking = await db
         .select({
           name: sources.name,
@@ -661,10 +1128,8 @@ export function createAdminRouter(): Router {
         .orderBy(desc(sources.qualityScore))
         .limit(10);
 
-      // Stale events count
       const staleCount = await countStaleEvents();
 
-      // Duplicates merged today (approximate: events updated today with source_count > 1)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
@@ -704,7 +1169,6 @@ export function createAdminRouter(): Router {
 
   // ─── QR Code Widget ──────────────────────────────────────────
 
-  // GET /admin/qr/:sourceName — Printable QR code page for a business
   router.get("/admin/qr/:sourceName", (req, res) => {
     const { sourceName } = req.params;
     res.type("html").send(getQRPageHTML(sourceName));

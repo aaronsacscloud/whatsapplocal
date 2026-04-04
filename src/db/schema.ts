@@ -8,6 +8,7 @@ import {
   integer,
   index,
   pgEnum,
+  jsonb,
 } from "drizzle-orm/pg-core";
 
 export const categoryEnum = pgEnum("category", [
@@ -222,6 +223,19 @@ export const favorites = pgTable(
   (table) => [index("idx_favorites_phone").on(table.phoneHash)]
 );
 
+export const scrapeLogs = pgTable("scrape_logs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  sourcesProcessed: integer("sources_processed").default(0),
+  eventsInserted: integer("events_inserted").default(0),
+  eventsRejected: integer("events_rejected").default(0),
+  duplicatesMerged: integer("duplicates_merged").default(0),
+  errors: integer("errors").default(0),
+  trigger: text("trigger").default("cron"),
+  details: jsonb("details"),
+});
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type Source = typeof sources.$inferSelect;
@@ -235,3 +249,5 @@ export type UserAlert = typeof userAlerts.$inferSelect;
 export type NewUserAlert = typeof userAlerts.$inferInsert;
 export type Favorite = typeof favorites.$inferSelect;
 export type NewFavorite = typeof favorites.$inferInsert;
+export type ScrapeLog = typeof scrapeLogs.$inferSelect;
+export type NewScrapeLog = typeof scrapeLogs.$inferInsert;
