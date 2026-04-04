@@ -131,10 +131,16 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
       .filter((msg) => msg.role === "assistant")
       .at(-1);
 
-    // Classify intent first so we have the detected language
-    // (we need this even if we end up routing to onboarding-response)
+    // Build conversation context for the classifier (helps with follow-ups)
+    const classifierContext = history.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }));
+
+    // Classify intent WITH conversation context
+    // This helps understand "dime más", "el primero", "y mañana?" etc.
     const classification = await withRetry(
-      () => classifyIntent(message.body),
+      () => classifyIntent(message.body, classifierContext),
       "classify-intent"
     );
 

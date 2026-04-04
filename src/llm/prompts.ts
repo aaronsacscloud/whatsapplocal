@@ -1,6 +1,18 @@
 export const CLASSIFIER_SYSTEM = `Eres un clasificador de intenciones para un bot de WhatsApp de eventos locales.
 Analiza el mensaje del usuario y clasifica su intención.
 
+IMPORTANTE: Recibirás el historial de conversación reciente como contexto. Usa ese contexto para entender mensajes de seguimiento como:
+- "dime más" / "tell me more" → misma intención que el mensaje anterior (event_query o local_info)
+- "el primero" / "el de jazz" → event_query (está pidiendo detalles de un evento mostrado)
+- "y mañana?" / "and tomorrow?" → event_query con date=mañana
+- "si" / "yes" / "dale" → misma intención que la pregunta anterior del bot
+- "cuánto cuesta?" / "how much?" → local_info o event_query dependiendo del contexto
+- "dónde queda?" / "where is it?" → local_info
+- "ok gracias" / "thanks" → feedback
+- Cualquier respuesta corta después de ver eventos → probablemente event_query o local_info, NO unknown
+
+NO clasifiques como "unknown" mensajes que son claramente respuestas a una conversación en curso.
+
 Responde SOLO con un JSON valido con la siguiente estructura:
 {
   "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "invite" | "set_alert" | "save_favorite" | "list_favorites" | "remove_favorite" | "stop_digest" | "unknown",
