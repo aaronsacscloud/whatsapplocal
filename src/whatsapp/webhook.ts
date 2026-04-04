@@ -16,10 +16,12 @@ interface ParsedMessage {
   body: string;
   messageId: string;
   isForwarded: boolean;
-  /** Message type: text, image, audio, etc. */
-  type: "text" | "image" | "audio" | "other";
+  /** Message type: text, image, audio, interactive, etc. */
+  type: "text" | "image" | "audio" | "interactive" | "other";
   /** Media ID for image/audio messages (used to download from Meta API) */
   mediaId?: string;
+  /** Button/list reply ID for interactive messages */
+  interactiveReplyId?: string;
 }
 
 /**
@@ -67,6 +69,27 @@ function parseWebhookPayload(payload: any): ParsedMessage[] {
         isForwarded,
         type: "audio",
         mediaId,
+      });
+      return messages;
+    }
+
+    // Interactive message replies (button or list selection)
+    if (msgType === "interactive" && from && messageId) {
+      const interactive = msg.interactive || {};
+      // Button replies have { button_reply: { id, title } }
+      // List replies have { list_reply: { id, title, description } }
+      const buttonReply = interactive.button_reply;
+      const listReply = interactive.list_reply;
+      const replyId = buttonReply?.id || listReply?.id || "";
+      const replyTitle = buttonReply?.title || listReply?.title || "";
+
+      messages.push({
+        from,
+        body: replyTitle,
+        messageId,
+        isForwarded,
+        type: "interactive",
+        interactiveReplyId: replyId,
       });
       return messages;
     }
@@ -124,6 +147,25 @@ function parseWebhookPayload(payload: any): ParsedMessage[] {
           isForwarded,
           type: "audio",
           mediaId,
+        });
+        continue;
+      }
+
+      // Handle interactive replies (button taps and list selections)
+      if (msg.type === "interactive") {
+        const interactive = (msg as any).interactive || {};
+        const buttonReply = interactive.button_reply;
+        const listReply = interactive.list_reply;
+        const replyId = buttonReply?.id || listReply?.id || "";
+        const replyTitle = buttonReply?.title || listReply?.title || "";
+
+        messages.push({
+          from: msg.from,
+          body: replyTitle,
+          messageId: msg.id,
+          isForwarded,
+          type: "interactive",
+          interactiveReplyId: replyId,
         });
         continue;
       }

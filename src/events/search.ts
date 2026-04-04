@@ -4,7 +4,8 @@ import type { Event } from "../db/schema.js";
 import type { ClassificationResult } from "../llm/classifier.js";
 
 export async function searchFromClassification(
-  classification: ClassificationResult
+  classification: ClassificationResult,
+  interests?: string[]
 ): Promise<Event[]> {
   const config = getConfig();
   const city = classification.city ?? config.DEFAULT_CITY;
@@ -37,7 +38,36 @@ export async function searchFromClassification(
     filters.dateTo = nextWeek;
   }
 
-  return searchEvents(filters);
+  const results = await searchEvents(filters);
+
+  // Boost events matching user interests (put matching categories first)
+  if (interests && interests.length > 0 && !classification.category) {
+    return boostByInterests(results, interests);
+  }
+
+  return results;
+}
+
+/**
+ * Re-order events so those matching user interests appear first,
+ * while preserving chronological order within each group.
+ */
+function boostByInterests(events: Event[], interests: string[]): Event[] {
+  const interestSet = new Set(interests.map((i) => i.toLowerCase()));
+
+  const matching: Event[] = [];
+  const rest: Event[] = [];
+
+  for (const event of events) {
+    const category = ((event as any).category || "").toLowerCase();
+    if (interestSet.has(category)) {
+      matching.push(event);
+    } else {
+      rest.push(event);
+    }
+  }
+
+  return [...matching, ...rest];
 }
 
 function parseDateRange(dateStr: string): {
@@ -94,7 +124,13 @@ function parseDateRange(dateStr: string): {
     return { dateFrom: saturday, dateTo: monday };
   }
 
-  if (lower.includes("esta semana") || lower.includes("this week")) {
+  if (
+    lower.includes("esta semana") ||
+    lower.includes("this week") ||
+    lower.includes("la semana") ||
+    lower.includes("weekly") ||
+    lower === "semana"
+  ) {
     const endOfWeek = new Date(today);
     endOfWeek.setUTCDate(today.getUTCDate() + (7 - today.getUTCDay()));
     return { dateFrom: today, dateTo: endOfWeek };

@@ -1,5 +1,5 @@
 import { classifyIntent } from "../llm/classifier.js";
-import { upsertUser, updatePreferences } from "../users/repository.js";
+import { upsertUser, updatePreferences, findUserByPhone } from "../users/repository.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
 import { withRetry } from "../utils/retry.js";
@@ -7,6 +7,7 @@ import { sendTextMessage } from "./sender.js";
 import { PROCESSING_MESSAGE, PROCESSING_MESSAGE_EN } from "../llm/prompts.js";
 import { handleOnboarding } from "../handlers/onboarding.js";
 import { handleOnboardingResponse } from "../handlers/onboarding-response.js";
+import { handleInteractiveReply } from "../handlers/interactive-reply.js";
 import { handleEventQuery } from "../handlers/event-query.js";
 import { handleVenueQuery } from "../handlers/venue-query.js";
 import { handleForward } from "../handlers/forward.js";
@@ -15,6 +16,14 @@ import { handleUnknown } from "../handlers/unknown.js";
 import { handleLocalInfo } from "../handlers/local-info.js";
 import { handleImage } from "../handlers/image.js";
 import { handleVoice } from "../handlers/voice.js";
+import { handleSetAlert } from "../handlers/alert.js";
+import {
+  handleSaveFavorite,
+  handleListFavorites,
+  handleRemoveFavorite,
+} from "../handlers/favorites.js";
+import { handleStopDigest } from "../handlers/digest-opt-out.js";
+import { handleInvite } from "../handlers/invite.js";
 import { hashPhone } from "../utils/hash.js";
 import {
   saveMessage,
@@ -27,10 +36,12 @@ export interface IncomingMessage {
   body: string;
   messageId: string;
   isForwarded: boolean;
-  /** Message type: text, image, audio, etc. */
-  type: "text" | "image" | "audio" | "other";
+  /** Message type: text, image, audio, interactive, etc. */
+  type: "text" | "image" | "audio" | "interactive" | "other";
   /** Media ID for image/audio messages */
   mediaId?: string;
+  /** Button/list reply ID for interactive messages */
+  interactiveReplyId?: string;
 }
 
 export async function routeMessage(message: IncomingMessage): Promise<void> {
@@ -82,6 +93,29 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
         responseTimeMs: Date.now() - startTime,
       });
       return;
+    }
+
+    // Handle interactive message replies (button taps, list selections)
+    if (message.type === "interactive" && message.interactiveReplyId) {
+      await saveMessage(phoneHash, "user", `[interactive: ${message.interactiveReplyId}] ${message.body}`);
+
+      const handled = await handleInteractiveReply(
+        message.from,
+        message.interactiveReplyId,
+        message.body
+      );
+
+      if (handled) {
+        await saveMessage(phoneHash, "assistant", "[interactive reply handled]", "interactive");
+        trackQuery({
+          phoneHash,
+          intent: "interactive",
+          responseTimeMs: Date.now() - startTime,
+        });
+        return;
+      }
+      // If not handled by interactive handler, fall through to normal routing
+      // using the button title as the message body
     }
 
     // Fetch conversation history (last 5 messages for context)
@@ -162,6 +196,10 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
 
     let botResponse: string | undefined;
 
+    // Fetch user interests for personalization
+    const user = await findUserByPhone(message.from);
+    const userInterests = user?.interests ?? undefined;
+
     switch (classification.intent) {
       case "onboarding":
         await handleOnboarding(message.from, language);
@@ -175,7 +213,8 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
               message.body,
               classification,
               conversationHistory,
-              language
+              language,
+              userInterests ?? undefined
             ),
           "event-query-handler"
         );
@@ -212,6 +251,48 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
 
       case "feedback":
         await handleFeedback(message.from, language);
+        break;
+
+      case "invite":
+        botResponse = await withRetry(
+          () => handleInvite(message.from, language),
+          "invite-handler"
+        );
+        break;
+
+      case "set_alert":
+        botResponse = await withRetry(
+          () => handleSetAlert(message.from, classification, language),
+          "set-alert-handler"
+        );
+        break;
+
+      case "save_favorite":
+        botResponse = await withRetry(
+          () => handleSaveFavorite(message.from, language),
+          "save-favorite-handler"
+        );
+        break;
+
+      case "list_favorites":
+        botResponse = await withRetry(
+          () => handleListFavorites(message.from, language),
+          "list-favorites-handler"
+        );
+        break;
+
+      case "remove_favorite":
+        botResponse = await withRetry(
+          () => handleRemoveFavorite(message.from, language),
+          "remove-favorite-handler"
+        );
+        break;
+
+      case "stop_digest":
+        botResponse = await withRetry(
+          () => handleStopDigest(message.from, language),
+          "stop-digest-handler"
+        );
         break;
 
       case "unknown":

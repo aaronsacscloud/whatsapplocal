@@ -597,6 +597,60 @@ export function getDashboardHTML(): string {
     </div>
   </div>
 
+  <!-- Retention & Engagement Metrics -->
+  <div class="section" id="metrics-section">
+    <div class="section-header">
+      <h2>Retention & Engagement</h2>
+    </div>
+    <div class="stats-row" style="margin-bottom:1.25rem">
+      <div class="stat-card">
+        <div class="stat-value" id="metric-dau">-</div>
+        <div class="stat-label">DAU</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="metric-wau">-</div>
+        <div class="stat-label">WAU</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="metric-mau">-</div>
+        <div class="stat-label">MAU</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="metric-retention">-</div>
+        <div class="stat-label">Retention</div>
+      </div>
+    </div>
+    <div class="analytics-grid">
+      <div class="analytics-panel">
+        <h3>Retention Trend (7 days)</h3>
+        <div class="daily-chart" id="retention-chart"></div>
+      </div>
+      <div class="analytics-panel">
+        <h3>Popular Hours (Heatmap)</h3>
+        <div id="hours-heatmap" style="display:flex;flex-wrap:wrap;gap:2px;"></div>
+      </div>
+    </div>
+    <div class="analytics-grid" style="margin-top:1rem">
+      <div class="analytics-panel">
+        <h3>Response Time</h3>
+        <div id="response-time-stats" style="font-size:0.85rem;color:#e0e0e0;">
+          <div style="margin-bottom:0.35rem"><strong>Avg:</strong> <span id="rt-avg">-</span></div>
+          <div style="margin-bottom:0.35rem"><strong>P50:</strong> <span id="rt-p50">-</span></div>
+          <div><strong>P95:</strong> <span id="rt-p95">-</span></div>
+        </div>
+        <div class="daily-chart" id="rt-trend-chart" style="margin-top:0.75rem;height:80px;"></div>
+      </div>
+      <div class="analytics-panel">
+        <h3>Engagement</h3>
+        <div style="font-size:0.85rem;color:#e0e0e0;">
+          <div style="margin-bottom:0.35rem"><strong>Avg queries/user:</strong> <span id="metric-avg-queries">-</span></div>
+          <div style="margin-bottom:0.35rem"><strong>Total queries (7d):</strong> <span id="metric-total-queries-7d">-</span></div>
+          <div><strong>Unique users (7d):</strong> <span id="metric-unique-users-7d">-</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Analytics Section -->
   <div class="section" id="analytics-section">
     <div class="section-header">
@@ -716,7 +770,10 @@ export function getDashboardHTML(): string {
           '<td>' + fmtDate(s.lastScrapedAt) + '</td>' +
           '<td><div class="confidence-bar"><div class="fill" style="width:' + successPct + '%;background:' + (successPct > 80 ? '#4ecca3' : successPct > 50 ? '#ffb74d' : '#e94560') + '"></div></div>' + successPct + '%</td>' +
           '<td><label class="toggle"><input type="checkbox"' + (s.isActive ? ' checked' : '') + ' onchange="toggleSource(\\'' + s.id + '\\', this.checked)"><span class="slider"></span></label></td>' +
-          '<td><button class="btn btn-danger btn-sm" onclick="deleteSource(\\'' + s.id + '\\')">Delete</button></td>' +
+          '<td>' +
+            '<a class="btn btn-primary btn-sm" href="/admin/qr/' + encodeURIComponent(s.name) + '" target="_blank" style="margin-right:0.35rem;text-decoration:none">QR</a>' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteSource(\\'' + s.id + '\\')">Delete</button>' +
+          '</td>' +
         '</tr>';
       }).join('');
     }).catch(function(err) {
@@ -955,11 +1012,98 @@ export function getDashboardHTML(): string {
     loadTopQueries();
   }
 
+  // ─── Retention & Engagement Metrics ─────────────────────────
+
+  function loadRetentionMetrics() {
+    api('GET', '/admin/api/metrics/retention').then(function(data) {
+      document.getElementById('metric-dau').textContent = data.dau || 0;
+      document.getElementById('metric-wau').textContent = data.wau || 0;
+      document.getElementById('metric-mau').textContent = data.mau || 0;
+      document.getElementById('metric-retention').textContent = (data.retentionRate || 0) + '%';
+
+      // Retention trend chart
+      var container = document.getElementById('retention-chart');
+      if (data.retentionTrend && data.retentionTrend.length > 0) {
+        var maxCount = Math.max.apply(null, data.retentionTrend.map(function(d) { return Number(d.uniqueUsers) || 0; }));
+        container.innerHTML = data.retentionTrend.map(function(d) {
+          var cnt = Number(d.uniqueUsers) || 0;
+          var pct = maxCount > 0 ? Math.round((cnt / maxCount) * 100) : 0;
+          var dt = new Date(d.date + 'T00:00:00');
+          var label = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          return '<div class="daily-bar-wrap" title="' + label + ': ' + cnt + ' users">' +
+            '<div class="daily-bar" style="height:' + Math.max(pct, 2) + '%;background:#ce93d8"></div>' +
+            '<span class="daily-label">' + label + '</span>' +
+          '</div>';
+        }).join('');
+      } else {
+        container.innerHTML = '<div class="empty-state" style="width:100%;display:flex;align-items:center;justify-content:center;">No retention data yet</div>';
+      }
+    }).catch(function(err) {
+      console.error('Failed to load retention metrics:', err);
+    });
+  }
+
+  function loadEngagementMetrics() {
+    api('GET', '/admin/api/metrics/engagement').then(function(data) {
+      document.getElementById('metric-avg-queries').textContent = data.avgQueriesPerUser || 0;
+      document.getElementById('metric-total-queries-7d').textContent = data.totalQueries || 0;
+      document.getElementById('metric-unique-users-7d').textContent = data.uniqueUsers || 0;
+
+      // Response time stats
+      if (data.responseTime) {
+        document.getElementById('rt-avg').textContent = data.responseTime.avgMs + 'ms';
+        document.getElementById('rt-p50').textContent = data.responseTime.p50Ms + 'ms';
+        document.getElementById('rt-p95').textContent = data.responseTime.p95Ms + 'ms';
+      }
+
+      // Response time trend chart
+      var rtContainer = document.getElementById('rt-trend-chart');
+      if (data.responseTimeTrend && data.responseTimeTrend.length > 0) {
+        var maxMs = Math.max.apply(null, data.responseTimeTrend.map(function(d) { return Number(d.avgMs) || 0; }));
+        rtContainer.innerHTML = data.responseTimeTrend.map(function(d) {
+          var ms = Math.round(Number(d.avgMs) || 0);
+          var pct = maxMs > 0 ? Math.round((ms / maxMs) * 100) : 0;
+          var dt = new Date(d.date + 'T00:00:00');
+          var label = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          return '<div class="daily-bar-wrap" title="' + label + ': ' + ms + 'ms">' +
+            '<div class="daily-bar" style="height:' + Math.max(pct, 2) + '%;background:#64b5f6"></div>' +
+            '<span class="daily-label">' + label + '</span>' +
+          '</div>';
+        }).join('');
+      }
+
+      // Popular hours heatmap
+      var hmContainer = document.getElementById('hours-heatmap');
+      if (data.popularHours && data.popularHours.length > 0) {
+        var maxH = Math.max.apply(null, data.popularHours.map(function(h) { return h.count; }));
+        hmContainer.innerHTML = data.popularHours.map(function(h) {
+          var intensity = maxH > 0 ? h.count / maxH : 0;
+          var r = Math.round(78 + intensity * (233 - 78));
+          var g = Math.round(204 + intensity * (69 - 204));
+          var b = Math.round(163 + intensity * (96 - 163));
+          var bg = 'rgba(' + r + ',' + g + ',' + b + ',' + (0.15 + intensity * 0.85) + ')';
+          return '<div title="' + h.hour + ':00 — ' + h.count + ' queries" style="' +
+            'width:calc(25% - 2px);aspect-ratio:1;background:' + bg + ';border-radius:4px;' +
+            'display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:#e0e0e0;' +
+            '">' + h.hour + '</div>';
+        }).join('');
+      }
+    }).catch(function(err) {
+      console.error('Failed to load engagement metrics:', err);
+    });
+  }
+
+  function loadMetrics() {
+    loadRetentionMetrics();
+    loadEngagementMetrics();
+  }
+
   // Initial load
   loadStats();
   loadSources();
   fetchEvents();
   loadAnalytics();
+  loadMetrics();
 </script>
 </body>
 </html>`;

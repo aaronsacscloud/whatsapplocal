@@ -3,13 +3,14 @@ Analiza el mensaje del usuario y clasifica su intención.
 
 Responde SOLO con un JSON valido con la siguiente estructura:
 {
-  "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "unknown",
+  "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "invite" | "set_alert" | "save_favorite" | "list_favorites" | "remove_favorite" | "stop_digest" | "unknown",
   "city": string | null,
   "neighborhood": string | null,
   "date": string | null,
   "category": string | null,
   "query": string | null,
-  "language": "es" | "en"
+  "language": "es" | "en",
+  "budget": "free" | "low" | "high" | null
 }
 
 Intenciones:
@@ -19,7 +20,19 @@ Intenciones:
 - forward_content: cuando el usuario reenvía un mensaje con info de un evento
 - onboarding: saludos o preguntas sobre como funciona. Ej: "hola", "que es esto?", "como funciona?", "hi", "hello", "how does this work?"
 - feedback: comentarios sobre el servicio. Ej: "gracias", "no me sirvio", "muy bueno", "thanks", "great service"
+- invite: usuario quiere invitar amigos o compartir el bot. Ej: "invitar amigo", "invite friend", "compartir bot", "share", "recomendar", "comparte", "tell a friend", "share with friend"
+- set_alert: usuario quiere suscribirse a alertas de una categoría. Ej: "avisame cuando haya jazz", "alert me for food events", "quiero alertas de musica", "notify me about wellness events". Extrae la categoría en "category".
+- save_favorite: usuario quiere guardar un evento. Ej: "guarda este evento", "save this", "favorito", "guardalo", "save it"
+- list_favorites: usuario quiere ver sus favoritos. Ej: "mis favoritos", "my favorites", "mis eventos guardados", "my saved events"
+- remove_favorite: usuario quiere quitar un favorito. Ej: "quitar favorito", "remove favorite", "eliminar guardado"
+- stop_digest: usuario quiere dejar de recibir el resumen diario. Ej: "no mas digests", "no more digests", "para el resumen", "stop daily summary", "no quiero el resumen diario"
 - unknown: cualquier otra cosa
+
+Para "budget": Detecta si el usuario menciona preferencia de precio.
+- "free" / "gratis" / "gratuito" / "sin costo" / "free events" → budget: "free"
+- "barato" / "economico" / "cheap" / "budget" / "affordable" / "bajo costo" → budget: "low"
+- "nice" / "fine dining" / "caro" / "lujoso" / "premium" / "exclusivo" / "fancy" / "upscale" → budget: "high"
+- Si no hay mención de precio → budget: null
 
 Para "language": Detecta el idioma del mensaje del usuario. Si el mensaje está en inglés, usa "en". Para español o cualquier otro idioma, usa "es". Default: "es".
 
@@ -27,7 +40,7 @@ Para "date", interpreta expresiones como:
 - "esta noche" / "hoy" / "tonight" / "today" → fecha de hoy
 - "manana" / "tomorrow" → fecha de manana
 - "este finde" / "este fin de semana" / "this weekend" → proximo sabado y domingo
-- "esta semana" / "this week" → desde hoy hasta el domingo
+- "esta semana" / "la semana" / "muestrame la semana" / "this week" / "weekly" / "the week" → "esta semana" (desde hoy hasta el domingo)
 
 Para "category", usa: music, food, nightlife, culture, sports, popup, wellness (spa/yoga/temazcal), tour (tours/recorridos), class (clases/talleres), adventure (globo/cabalgata/outdoor), wine (vino/mezcal/cata), other`;
 

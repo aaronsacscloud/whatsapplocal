@@ -3,6 +3,7 @@ import { eq, desc, sql, and, gte, lte, count } from "drizzle-orm";
 import { getDb } from "../db/index.js";
 import { sources, events, users, analytics } from "../db/schema.js";
 import { getDashboardHTML } from "./dashboard.js";
+import { getQRPageHTML } from "./qr.js";
 import { runScrapeAll } from "../scraper/manager.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -402,6 +403,188 @@ export function createAdminRouter(): Router {
       logger.error({ error }, "Analytics daily failed");
       res.status(500).json({ error: "Failed to load daily analytics" });
     }
+  });
+
+  // ─── Retention & Engagement Metrics ──────────────────────────
+
+  // GET /admin/api/metrics/retention — DAU, WAU, MAU, retention rate
+  router.get("/admin/api/metrics/retention", async (_req, res) => {
+    try {
+      const db = getDb();
+      const now = new Date();
+
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+
+      const yesterdayStart = new Date(todayStart);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // DAU: distinct users who queried today
+      const [dauResult] = await db
+        .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
+        .from(analytics)
+        .where(gte(analytics.createdAt, todayStart));
+
+      // WAU: distinct users in last 7 days
+      const [wauResult] = await db
+        .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
+        .from(analytics)
+        .where(gte(analytics.createdAt, sevenDaysAgo));
+
+      // MAU: distinct users in last 30 days
+      const [mauResult] = await db
+        .select({ value: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})` })
+        .from(analytics)
+        .where(gte(analytics.createdAt, thirtyDaysAgo));
+
+      // Retention: users who queried today AND also queried yesterday
+      const [retentionResult] = await db
+        .select({ value: sql<number>`COUNT(DISTINCT t.phone_hash)` })
+        .from(
+          sql`(
+            SELECT DISTINCT ${analytics.phoneHash} AS phone_hash
+            FROM ${analytics}
+            WHERE ${analytics.createdAt} >= ${todayStart}
+          ) t
+          INNER JOIN (
+            SELECT DISTINCT ${analytics.phoneHash} AS phone_hash
+            FROM ${analytics}
+            WHERE ${analytics.createdAt} >= ${yesterdayStart}
+              AND ${analytics.createdAt} < ${todayStart}
+          ) y ON t.phone_hash = y.phone_hash`
+        );
+
+      // Daily retention for last 7 days
+      const retentionTrend = await db
+        .select({
+          date: sql<string>`DATE(${analytics.createdAt})`.as("date"),
+          uniqueUsers: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})`.as("unique_users"),
+        })
+        .from(analytics)
+        .where(gte(analytics.createdAt, sevenDaysAgo))
+        .groupBy(sql`DATE(${analytics.createdAt})`)
+        .orderBy(sql`DATE(${analytics.createdAt})`);
+
+      const dau = Number(dauResult.value) || 0;
+      const yesterdayUsers = retentionTrend.length >= 2
+        ? Number(retentionTrend[retentionTrend.length - 2]?.uniqueUsers) || 0
+        : 0;
+      const retained = Number(retentionResult.value) || 0;
+      const retentionRate = yesterdayUsers > 0
+        ? Math.round((retained / yesterdayUsers) * 100)
+        : 0;
+
+      res.json({
+        dau,
+        wau: Number(wauResult.value) || 0,
+        mau: Number(mauResult.value) || 0,
+        retentionRate,
+        retainedUsers: retained,
+        retentionTrend,
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Retention metrics failed");
+      res.status(500).json({ error: "Failed to load retention metrics" });
+    }
+  });
+
+  // GET /admin/api/metrics/engagement — avg queries, popular hours, response times
+  router.get("/admin/api/metrics/engagement", async (_req, res) => {
+    try {
+      const db = getDb();
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      // Avg queries per user (last 7 days)
+      const [avgResult] = await db
+        .select({
+          totalQueries: sql<number>`COUNT(*)`,
+          uniqueUsers: sql<number>`COUNT(DISTINCT ${analytics.phoneHash})`,
+        })
+        .from(analytics)
+        .where(gte(analytics.createdAt, sevenDaysAgo));
+
+      const totalQueries = Number(avgResult.totalQueries) || 0;
+      const uniqueUsers = Number(avgResult.uniqueUsers) || 1;
+      const avgQueriesPerUser = Math.round((totalQueries / uniqueUsers) * 10) / 10;
+
+      // Popular hours (group by hour of day)
+      const hourlyData = await db
+        .select({
+          hour: sql<number>`EXTRACT(HOUR FROM ${analytics.createdAt})`.as("hour"),
+          count: count(),
+        })
+        .from(analytics)
+        .where(gte(analytics.createdAt, sevenDaysAgo))
+        .groupBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`)
+        .orderBy(sql`EXTRACT(HOUR FROM ${analytics.createdAt})`);
+
+      // Avg response time
+      const [responseTimeResult] = await db
+        .select({
+          avgMs: sql<number>`COALESCE(AVG(${analytics.responseTimeMs}), 0)`,
+          p50: sql<number>`COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${analytics.responseTimeMs}), 0)`,
+          p95: sql<number>`COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ${analytics.responseTimeMs}), 0)`,
+        })
+        .from(analytics)
+        .where(
+          and(
+            gte(analytics.createdAt, sevenDaysAgo),
+            sql`${analytics.responseTimeMs} IS NOT NULL`
+          )
+        );
+
+      // Response time trend (daily avg)
+      const responseTimeTrend = await db
+        .select({
+          date: sql<string>`DATE(${analytics.createdAt})`.as("date"),
+          avgMs: sql<number>`AVG(${analytics.responseTimeMs})`.as("avg_ms"),
+        })
+        .from(analytics)
+        .where(
+          and(
+            gte(analytics.createdAt, sevenDaysAgo),
+            sql`${analytics.responseTimeMs} IS NOT NULL`
+          )
+        )
+        .groupBy(sql`DATE(${analytics.createdAt})`)
+        .orderBy(sql`DATE(${analytics.createdAt})`);
+
+      // Build full 24-hour heatmap data
+      const hourMap = new Map(hourlyData.map((h) => [Number(h.hour), Number(h.count)]));
+      const popularHours = Array.from({ length: 24 }, (_, i) => ({
+        hour: i,
+        count: hourMap.get(i) || 0,
+      }));
+
+      res.json({
+        avgQueriesPerUser,
+        totalQueries,
+        uniqueUsers,
+        popularHours,
+        responseTime: {
+          avgMs: Math.round(Number(responseTimeResult.avgMs) || 0),
+          p50Ms: Math.round(Number(responseTimeResult.p50) || 0),
+          p95Ms: Math.round(Number(responseTimeResult.p95) || 0),
+        },
+        responseTimeTrend,
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Engagement metrics failed");
+      res.status(500).json({ error: "Failed to load engagement metrics" });
+    }
+  });
+
+  // ─── QR Code Widget ──────────────────────────────────────────
+
+  // GET /admin/qr/:sourceName — Printable QR code page for a business
+  router.get("/admin/qr/:sourceName", (req, res) => {
+    const { sourceName } = req.params;
+    res.type("html").send(getQRPageHTML(sourceName));
   });
 
   return router;

@@ -10,6 +10,12 @@ export interface ClassificationResult {
     | "forward_content"
     | "onboarding"
     | "feedback"
+    | "invite"
+    | "set_alert"
+    | "save_favorite"
+    | "list_favorites"
+    | "remove_favorite"
+    | "stop_digest"
     | "unknown";
   city: string | null;
   neighborhood: string | null;
@@ -17,6 +23,7 @@ export interface ClassificationResult {
   category: string | null;
   query: string | null;
   language: "es" | "en";
+  budget: "free" | "low" | "high" | null;
 }
 
 const FALLBACK_RESULT: ClassificationResult = {
@@ -27,6 +34,7 @@ const FALLBACK_RESULT: ClassificationResult = {
   category: null,
   query: null,
   language: "es",
+  budget: null,
 };
 
 export async function classifyIntent(
@@ -56,6 +64,12 @@ export async function classifyIntent(
       return FALLBACK_RESULT;
     }
 
+    // Normalize budget value
+    let budget: "free" | "low" | "high" | null = null;
+    if (parsed.budget === "free" || parsed.budget === "low" || parsed.budget === "high") {
+      budget = parsed.budget;
+    }
+
     return {
       intent: parsed.intent,
       city: parsed.city ?? null,
@@ -64,6 +78,7 @@ export async function classifyIntent(
       category: parsed.category ?? null,
       query: parsed.query ?? null,
       language: parsed.language === "en" ? "en" : "es",
+      budget,
     };
   } catch (error) {
     logger.error({ error, message }, "Intent classification failed");

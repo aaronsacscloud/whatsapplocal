@@ -6,6 +6,8 @@ import { getLogger } from "../utils/logger.js";
 import { executeScrapeJob } from "./scrape-job.js";
 import { executeExpireJob } from "./expire-job.js";
 import { executeHealthCheckJob } from "./health-check-job.js";
+import { executeDailyDigest } from "./daily-digest.js";
+import { executeAlertChecker } from "./alert-checker.js";
 
 export async function shouldRunJob(
   jobName: string,
@@ -70,5 +72,19 @@ export function startScheduler(): void {
     });
   });
 
-  logger.info("Scheduler started: scrape (4h), expire (1h), health (30m)");
+  // Daily digest at 10:00 AM SMA time (16:00 UTC)
+  cron.schedule("0 16 * * *", () => {
+    executeDailyDigest().catch((error) => {
+      logger.error({ error }, "Scheduled daily digest failed");
+    });
+  });
+
+  // Alert checker every 2 hours
+  cron.schedule("0 */2 * * *", () => {
+    executeAlertChecker().catch((error) => {
+      logger.error({ error }, "Scheduled alert checker failed");
+    });
+  });
+
+  logger.info("Scheduler started: scrape (4h), expire (1h), health (30m), digest (daily 10am SMA), alerts (2h)");
 }

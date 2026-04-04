@@ -2,6 +2,7 @@ import { sendTextMessage } from "../whatsapp/sender.js";
 import { updatePreferences } from "../users/repository.js";
 import { hashPhone } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
+import { getShareSuggestion } from "./invite.js";
 import {
   ONBOARDING_INTERESTS_MESSAGE,
   ONBOARDING_INTERESTS_MESSAGE_EN,
@@ -141,6 +142,10 @@ async function handleInterestsResponse(
     ? ONBOARDING_COMPLETE_MESSAGE_EN
     : ONBOARDING_COMPLETE_MESSAGE;
   await sendTextMessage(from, message);
+
+  // After onboarding, suggest sharing with friends
+  const shareSuggestion = getShareSuggestion(isEnglish ? "en" : "es");
+  await sendTextMessage(from, shareSuggestion);
 
   return true;
 }

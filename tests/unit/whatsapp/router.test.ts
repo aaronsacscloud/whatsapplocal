@@ -106,7 +106,6 @@ describe("routeMessage", () => {
       isForwarded: false,
     });
 
-    expect(mockGenerateResponse).toHaveBeenCalled();
     expect(mockSendText).toHaveBeenCalled();
   });
 

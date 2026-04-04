@@ -97,6 +97,7 @@ export const users = pgTable("users", {
   interests: text("interests").array(),
   isTourist: boolean("is_tourist"),
   onboardingComplete: boolean("onboarding_complete").default(false),
+  digestEnabled: boolean("digest_enabled").default(true),
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
   lastActiveAt: timestamp("last_active_at", { withTimezone: true }).defaultNow(),
   queryCount: integer("query_count").default(0),
@@ -161,6 +162,49 @@ export const analytics = pgTable(
   ]
 );
 
+export const userAlerts = pgTable(
+  "user_alerts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    phoneHash: text("phone_hash").notNull(),
+    category: text("category").notNull(),
+    query: text("query"),
+    active: boolean("active").default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    index("idx_user_alerts_phone").on(table.phoneHash, table.active),
+    index("idx_user_alerts_category").on(table.category, table.active),
+  ]
+);
+
+export const alertNotifications = pgTable(
+  "alert_notifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    alertId: uuid("alert_id")
+      .notNull()
+      .references(() => userAlerts.id, { onDelete: "cascade" }),
+    eventId: uuid("event_id")
+      .notNull()
+      .references(() => events.id, { onDelete: "cascade" }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }).defaultNow(),
+  }
+);
+
+export const favorites = pgTable(
+  "favorites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    phoneHash: text("phone_hash").notNull(),
+    eventId: uuid("event_id").references(() => events.id, {
+      onDelete: "cascade",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [index("idx_favorites_phone").on(table.phoneHash)]
+);
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type Source = typeof sources.$inferSelect;
@@ -170,3 +214,7 @@ export type Conversation = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;
 export type Analytics = typeof analytics.$inferSelect;
 export type NewAnalytics = typeof analytics.$inferInsert;
+export type UserAlert = typeof userAlerts.$inferSelect;
+export type NewUserAlert = typeof userAlerts.$inferInsert;
+export type Favorite = typeof favorites.$inferSelect;
+export type NewFavorite = typeof favorites.$inferInsert;

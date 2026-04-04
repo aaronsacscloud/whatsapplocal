@@ -4,10 +4,16 @@ import { getLogger } from "./utils/logger.js";
 import { createWebhookRouter } from "./whatsapp/webhook.js";
 import { createAdminRouter } from "./admin/routes.js";
 import { startScheduler } from "./jobs/scheduler.js";
+import { getLandingPageHTML } from "./landing/page.js";
 
 const config = loadConfig();
 const logger = getLogger();
 const app = express();
+
+// Landing page at root
+app.get("/", (_req, res) => {
+  res.type("html").send(getLandingPageHTML());
+});
 
 // Health check (before raw body parser)
 app.get("/health", (_req, res) => {

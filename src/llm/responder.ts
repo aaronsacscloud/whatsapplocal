@@ -114,7 +114,8 @@ export async function generateResponse(
   city: string,
   conversationHistory: ConversationMessage[] = [],
   language: "es" | "en" = "es",
-  userPhone?: string
+  userPhone?: string,
+  budget?: "free" | "low" | "high" | null
 ): Promise<string> {
   const logger = getLogger();
   const isEnglish = language === "en";
@@ -123,14 +124,26 @@ export async function generateResponse(
   const uniqueEvents = deduplicateByTitle(events);
 
   if (uniqueEvents.length > 0) {
-    return formatRichResponse(uniqueEvents, userMessage, city, language, userPhone);
+    return formatRichResponse(uniqueEvents, userMessage, city, language, userPhone, budget);
   }
 
   // No events: use LLM
   const client = getLLMClient();
   const knowledge = getLocalKnowledge();
   const baseSystem = isEnglish ? RESPONDER_SYSTEM_EN : RESPONDER_SYSTEM;
-  const systemWithKnowledge = `${baseSystem}\n\nCONOCIMIENTO LOCAL:\n${knowledge.substring(0, 3000)}`;
+
+  // Add budget context to system prompt if specified
+  let budgetContext = "";
+  if (budget) {
+    const budgetLabels: Record<string, { es: string; en: string }> = {
+      free: { es: "El usuario busca opciones GRATIS / sin costo.", en: "The user is looking for FREE options." },
+      low: { es: "El usuario busca opciones ECONOMICAS / baratas.", en: "The user is looking for BUDGET / cheap options." },
+      high: { es: "El usuario busca opciones PREMIUM / exclusivas / de lujo.", en: "The user is looking for PREMIUM / upscale options." },
+    };
+    budgetContext = `\n\nPRESUPUESTO: ${budgetLabels[budget][isEnglish ? "en" : "es"]} Menciona precios cuando los sepas.`;
+  }
+
+  const systemWithKnowledge = `${baseSystem}${budgetContext}\n\nCONOCIMIENTO LOCAL:\n${knowledge.substring(0, 3000)}`;
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (const msg of conversationHistory) {
@@ -164,7 +177,8 @@ async function formatRichResponse(
   userMessage: string,
   city: string,
   language: "es" | "en",
-  userPhone?: string
+  userPhone?: string,
+  budget?: "free" | "low" | "high" | null
 ): Promise<string> {
   const logger = getLogger();
   const isEn = language === "en";
@@ -205,10 +219,20 @@ async function formatRichResponse(
     }
   }
 
+  // Add budget hint if applicable
+  let budgetHint = "";
+  if (budget === "free") {
+    budgetHint = isEn ? "\n💚 Showing free/no-cost options" : "\n💚 Mostrando opciones gratis";
+  } else if (budget === "low") {
+    budgetHint = isEn ? "\n💰 Showing budget-friendly options" : "\n💰 Mostrando opciones economicas";
+  } else if (budget === "high") {
+    budgetHint = isEn ? "\n✨ Showing premium options" : "\n✨ Mostrando opciones premium";
+  }
+
   // Add final suggestion to the last message
   const suggestion = isEn
-    ? "\n\n¿Want more details on any? 🎶"
-    : "\n\n¿Quieres más detalles de alguno? 🎶";
+    ? `${budgetHint}\n\nWant more details on any? 🎶`
+    : `${budgetHint}\n\nQuieres mas detalles de alguno? 🎶`;
 
   if (allMessages.length > 0) {
     allMessages[allMessages.length - 1] += suggestion;
@@ -299,6 +323,76 @@ function groupEventsByDay(events: Event[], language: "es" | "en"): DayGroup[] {
   }
 
   return Array.from(groups.values());
+}
+
+/**
+ * Generate a share-ready formatted message for an event that users can forward.
+ */
+export function formatShareMessage(event: any, language: "es" | "en" = "es"): string {
+  const isEn = language === "en";
+  const lines: string[] = [];
+
+  const emoji = getCategoryEmoji(event.category);
+  const title = event.title || event.name || "Evento";
+  const venue = event.venueName || event.venue_name || "";
+
+  if (isEn) {
+    lines.push(`Check out what I found in SMA 👇`);
+  } else {
+    lines.push(`Mira lo que encontre en SMA 👇`);
+  }
+  lines.push("");
+  lines.push(`${emoji} *${title}*`);
+
+  if (venue) {
+    const addr = event.venueAddress || event.venue_address;
+    lines.push(`📍 ${venue}${addr ? ` — ${addr}` : ", San Miguel de Allende"}`);
+  }
+
+  const eventDate = event.eventDate || event.event_date;
+  if (eventDate) {
+    const d = new Date(eventDate);
+    const smaDate = new Date(d.getTime() + SMA_TZ_OFFSET * 3600000);
+    const dateStr = smaDate.toLocaleDateString(isEn ? "en-US" : "es-MX", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: "UTC",
+    });
+    const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
+    if (hasTime) {
+      const timeStr = smaDate.toLocaleTimeString(isEn ? "en-US" : "es-MX", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "UTC",
+      });
+      lines.push(`📅 ${dateStr} — ${timeStr}`);
+    } else {
+      lines.push(`📅 ${dateStr}`);
+    }
+  }
+
+  if (event.description) {
+    lines.push(event.description.substring(0, 120) + (event.description.length > 120 ? "..." : ""));
+  }
+
+  const sourceUrl = event.sourceUrl || event.source_url;
+  if (sourceUrl) {
+    lines.push(`🔗 ${sourceUrl}`);
+  }
+
+  lines.push("");
+
+  if (isEn) {
+    lines.push(`— Sent by WhatsApp Local Bot`);
+    lines.push(`Chat with me: wa.me/12058920417?text=Hola`);
+  } else {
+    lines.push(`— Enviado por WhatsApp Local Bot`);
+    lines.push(`Chatea conmigo: wa.me/12058920417?text=Hola`);
+  }
+
+  return lines.join("\n");
 }
 
 function getDateLabel(events: Event[], language: "es" | "en"): string {
