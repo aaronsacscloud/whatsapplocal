@@ -466,10 +466,13 @@ async function sendStructuredEventCards(
       // Send image first (if available) with caption = title
       if (card.imageUrl) {
         try {
+          logger.info({ imageUrl: card.imageUrl.substring(0, 60), to: userPhone.slice(-4) }, "Sending event image");
           await sendImageMessage(userPhone, card.imageUrl, card.imageCaption || "");
-        } catch {
-          // Skip failed images silently
+        } catch (imgError: any) {
+          logger.error({ error: imgError?.message?.substring(0, 80), imageUrl: card.imageUrl.substring(0, 60) }, "Image send failed");
         }
+      } else {
+        logger.debug({ title: card.imageCaption }, "No image URL for event");
       }
 
       // Send the text card
