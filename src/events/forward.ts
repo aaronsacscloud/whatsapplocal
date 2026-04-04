@@ -1,4 +1,4 @@
-import { extractEvent } from "../llm/extractor.js";
+import { extractEvent, type ExtractionResult } from "../llm/extractor.js";
 import { isContentAcceptable } from "../utils/moderation.js";
 import { eventDeduplicationHash } from "../utils/hash.js";
 import { upsertEvent, findByDedupHash } from "./repository.js";
@@ -12,15 +12,18 @@ export interface ForwardResult {
   reason?: "extracted" | "duplicate" | "low_confidence" | "not_event" | "error";
 }
 
-export async function processForwardedContent(
-  text: string
+/**
+ * Save an already-extracted event to the database.
+ * Shared by both text forwarding and image extraction flows.
+ */
+export async function processForwardedContentFromExtraction(
+  extraction: ExtractionResult,
+  rawContent?: string
 ): Promise<ForwardResult> {
   const logger = getLogger();
   const config = getConfig();
 
   try {
-    const extraction = await extractEvent(text);
-
     if (!extraction.isEvent) {
       return { success: false, reason: "not_event" };
     }
@@ -60,7 +63,7 @@ export async function processForwardedContent(
       description: extraction.description,
       sourceType: "user_forwarded",
       confidence: extraction.confidence,
-      rawContent: text,
+      rawContent: rawContent ?? null,
       dedupHash,
       expiresAt: extraction.eventDate
         ? new Date(
@@ -70,6 +73,20 @@ export async function processForwardedContent(
     });
 
     return { success: true, event, reason: "extracted" };
+  } catch (error) {
+    logger.error({ error }, "Failed to save extracted event");
+    return { success: false, reason: "error" };
+  }
+}
+
+export async function processForwardedContent(
+  text: string
+): Promise<ForwardResult> {
+  const logger = getLogger();
+
+  try {
+    const extraction = await extractEvent(text);
+    return processForwardedContentFromExtraction(extraction, text);
   } catch (error) {
     logger.error({ error }, "Failed to process forwarded content");
     return { success: false, reason: "error" };

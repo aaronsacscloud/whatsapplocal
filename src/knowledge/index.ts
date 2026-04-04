@@ -1,4 +1,5 @@
 import { SMA_KNOWLEDGE } from "./sma-base.js";
+import { SMA_SERVICES } from "./sma-services.js";
 import { getLogger } from "../utils/logger.js";
 
 let _knowledge: string = "";
@@ -13,7 +14,7 @@ export function getLocalKnowledge(): string {
   const logger = getLogger();
 
   try {
-    _knowledge = SMA_KNOWLEDGE;
+    _knowledge = SMA_KNOWLEDGE + "\n\n" + SMA_SERVICES;
     logger.info(
       { chars: _knowledge.length },
       "Local knowledge base loaded"

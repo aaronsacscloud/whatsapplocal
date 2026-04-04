@@ -1,7 +1,7 @@
 import { Router, json } from "express";
 import { eq, desc, sql, and, gte, lte, count } from "drizzle-orm";
 import { getDb } from "../db/index.js";
-import { sources, events, users } from "../db/schema.js";
+import { sources, events, users, analytics } from "../db/schema.js";
 import { getDashboardHTML } from "./dashboard.js";
 import { runScrapeAll } from "../scraper/manager.js";
 import { getLogger } from "../utils/logger.js";
@@ -330,6 +330,77 @@ export function createAdminRouter(): Router {
     } catch (error) {
       logger.error({ error }, "Manual scrape failed");
       res.status(500).json({ error: "Scrape failed" });
+    }
+  });
+
+  // ─── Analytics Endpoints ───────────────────────────────────────────
+
+  // GET /admin/api/analytics/top-queries — Top 20 most common queries
+  router.get("/admin/api/analytics/top-queries", async (_req, res) => {
+    try {
+      const db = getDb();
+      const results = await db
+        .select({
+          query: analytics.query,
+          intent: analytics.intent,
+          count: count(),
+        })
+        .from(analytics)
+        .where(sql`${analytics.query} IS NOT NULL`)
+        .groupBy(analytics.query, analytics.intent)
+        .orderBy(desc(count()))
+        .limit(20);
+
+      res.json(results);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Analytics top-queries failed");
+      res.status(500).json({ error: "Failed to load top queries" });
+    }
+  });
+
+  // GET /admin/api/analytics/intents — Intent distribution
+  router.get("/admin/api/analytics/intents", async (_req, res) => {
+    try {
+      const db = getDb();
+      const results = await db
+        .select({
+          intent: analytics.intent,
+          count: count(),
+        })
+        .from(analytics)
+        .groupBy(analytics.intent)
+        .orderBy(desc(count()));
+
+      res.json(results);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Analytics intents failed");
+      res.status(500).json({ error: "Failed to load intent distribution" });
+    }
+  });
+
+  // GET /admin/api/analytics/daily — Queries per day (last 30 days)
+  router.get("/admin/api/analytics/daily", async (_req, res) => {
+    try {
+      const db = getDb();
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+      const results = await db
+        .select({
+          date: sql<string>`DATE(${analytics.createdAt})`.as("date"),
+          count: count(),
+        })
+        .from(analytics)
+        .where(gte(analytics.createdAt, thirtyDaysAgo))
+        .groupBy(sql`DATE(${analytics.createdAt})`)
+        .orderBy(sql`DATE(${analytics.createdAt})`);
+
+      res.json(results);
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Analytics daily failed");
+      res.status(500).json({ error: "Failed to load daily analytics" });
     }
   });
 

@@ -4,24 +4,36 @@ import { incrementForwardCount } from "../users/repository.js";
 import { hashPhone } from "../utils/hash.js";
 import {
   FORWARD_SUCCESS_MESSAGE,
+  FORWARD_SUCCESS_MESSAGE_EN,
   FORWARD_FAILURE_MESSAGE,
+  FORWARD_FAILURE_MESSAGE_EN,
+  FORWARD_DUPLICATE_MESSAGE,
+  FORWARD_DUPLICATE_MESSAGE_EN,
 } from "../llm/prompts.js";
 
 export async function handleForward(
   from: string,
-  body: string
+  body: string,
+  language: "es" | "en" = "es"
 ): Promise<void> {
   const result = await processForwardedContent(body);
+  const isEnglish = language === "en";
 
   if (result.success) {
-    await sendTextMessage(from, FORWARD_SUCCESS_MESSAGE);
+    const message = isEnglish
+      ? FORWARD_SUCCESS_MESSAGE_EN
+      : FORWARD_SUCCESS_MESSAGE;
+    await sendTextMessage(from, message);
     await incrementForwardCount(hashPhone(from));
   } else if (result.reason === "duplicate") {
-    await sendTextMessage(
-      from,
-      "Ese evento ya lo tengo registrado. Gracias igual!"
-    );
+    const message = isEnglish
+      ? FORWARD_DUPLICATE_MESSAGE_EN
+      : FORWARD_DUPLICATE_MESSAGE;
+    await sendTextMessage(from, message);
   } else {
-    await sendTextMessage(from, FORWARD_FAILURE_MESSAGE);
+    const message = isEnglish
+      ? FORWARD_FAILURE_MESSAGE_EN
+      : FORWARD_FAILURE_MESSAGE;
+    await sendTextMessage(from, message);
   }
 }

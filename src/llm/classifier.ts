@@ -16,6 +16,7 @@ export interface ClassificationResult {
   date: string | null;
   category: string | null;
   query: string | null;
+  language: "es" | "en";
 }
 
 const FALLBACK_RESULT: ClassificationResult = {
@@ -25,6 +26,7 @@ const FALLBACK_RESULT: ClassificationResult = {
   date: null,
   category: null,
   query: null,
+  language: "es",
 };
 
 export async function classifyIntent(
@@ -61,6 +63,7 @@ export async function classifyIntent(
       date: parsed.date ?? null,
       category: parsed.category ?? null,
       query: parsed.query ?? null,
+      language: parsed.language === "en" ? "en" : "es",
     };
   } catch (error) {
     logger.error({ error, message }, "Intent classification failed");

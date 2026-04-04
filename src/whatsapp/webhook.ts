@@ -16,6 +16,10 @@ interface ParsedMessage {
   body: string;
   messageId: string;
   isForwarded: boolean;
+  /** Message type: text, image, audio, etc. */
+  type: "text" | "image" | "audio" | "other";
+  /** Media ID for image/audio messages (used to download from Meta API) */
+  mediaId?: string;
 }
 
 /**
@@ -36,15 +40,46 @@ function parseWebhookPayload(payload: any): ParsedMessage[] {
       data.contact?.phone ||
       "";
     const messageId = msg.id || msg.message_id || payload.id || "";
+    const isForwarded = !!(msg.context?.forwarded || msg.context?.from);
+
+    // Determine message type
+    const msgType = msg.type || "text";
+
+    if (msgType === "image" && from && messageId) {
+      const mediaId = msg.image?.id || "";
+      messages.push({
+        from,
+        body: msg.image?.caption || "",
+        messageId,
+        isForwarded,
+        type: "image",
+        mediaId,
+      });
+      return messages;
+    }
+
+    if (msgType === "audio" && from && messageId) {
+      const mediaId = msg.audio?.id || "";
+      messages.push({
+        from,
+        body: "",
+        messageId,
+        isForwarded,
+        type: "audio",
+        mediaId,
+      });
+      return messages;
+    }
+
+    // Text messages
     const body =
       msg.text?.body ||
       msg.body ||
       (typeof msg.text === "string" ? msg.text : "") ||
       "";
-    const isForwarded = !!(msg.context?.forwarded || msg.context?.from);
 
     if (from && messageId && body) {
-      messages.push({ from, body, messageId, isForwarded });
+      messages.push({ from, body, messageId, isForwarded, type: "text" });
     }
     return messages;
   }
@@ -62,13 +97,46 @@ function parseWebhookPayload(payload: any): ParsedMessage[] {
     const result = normalizeWebhook(payload);
     for (const msg of result.messages) {
       if (!msg.from || !msg.id) continue;
+
+      const isForwarded = !!msg.context?.from;
+
+      // Handle image messages
+      if (msg.type === "image") {
+        const mediaId = (msg as any).image?.id || "";
+        messages.push({
+          from: msg.from,
+          body: (msg as any).image?.caption || "",
+          messageId: msg.id,
+          isForwarded,
+          type: "image",
+          mediaId,
+        });
+        continue;
+      }
+
+      // Handle audio/voice messages
+      if (msg.type === "audio") {
+        const mediaId = (msg as any).audio?.id || "";
+        messages.push({
+          from: msg.from,
+          body: "",
+          messageId: msg.id,
+          isForwarded,
+          type: "audio",
+          mediaId,
+        });
+        continue;
+      }
+
+      // Only process text messages for now; skip other types
       if (msg.type !== "text") continue;
 
       messages.push({
         from: msg.from,
         body: msg.text?.body ?? "",
         messageId: msg.id,
-        isForwarded: !!msg.context?.from,
+        isForwarded,
+        type: "text",
       });
     }
     return messages;

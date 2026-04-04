@@ -81,6 +81,10 @@ export const sources = pgTable("sources", {
   lastScrapedAt: timestamp("last_scraped_at", { withTimezone: true }),
   successRate: real("success_rate").default(1.0),
   isActive: boolean("is_active").default(true),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  address: text("address"),
+  googleMapsUrl: text("google_maps_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
@@ -89,6 +93,10 @@ export const users = pgTable("users", {
   phoneHash: text("phone_hash").notNull().unique(),
   city: text("city"),
   neighborhood: text("neighborhood"),
+  language: text("language").default("es"),
+  interests: text("interests").array(),
+  isTourist: boolean("is_tourist"),
+  onboardingComplete: boolean("onboarding_complete").default(false),
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
   lastActiveAt: timestamp("last_active_at", { withTimezone: true }).defaultNow(),
   queryCount: integer("query_count").default(0),
@@ -119,8 +127,46 @@ export const messageQueue = pgTable("message_queue", {
   status: text("status").default("pending"),
 });
 
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    phoneHash: text("phone_hash").notNull(),
+    role: text("role").notNull(), // 'user' or 'assistant'
+    content: text("content").notNull(),
+    intent: text("intent"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    index("idx_conversations_phone").on(table.phoneHash, table.createdAt),
+  ]
+);
+
+export const analytics = pgTable(
+  "analytics",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    phoneHash: text("phone_hash"),
+    intent: text("intent").notNull(),
+    query: text("query"),
+    category: text("category"),
+    city: text("city"),
+    resultsCount: integer("results_count").default(0),
+    responseTimeMs: integer("response_time_ms"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    index("idx_analytics_intent").on(table.intent, table.createdAt),
+    index("idx_analytics_created").on(table.createdAt),
+  ]
+);
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
 export type Source = typeof sources.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+export type Analytics = typeof analytics.$inferSelect;
+export type NewAnalytics = typeof analytics.$inferInsert;

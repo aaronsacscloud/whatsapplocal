@@ -305,6 +305,134 @@ export function getDashboardHTML(): string {
 
   .table-wrap { overflow-x: auto; }
 
+  .analytics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+
+  .analytics-panel {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 1rem;
+  }
+
+  .analytics-panel h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #8899aa;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.75rem;
+  }
+
+  .intent-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+    font-size: 0.8rem;
+  }
+
+  .intent-bar-label {
+    min-width: 100px;
+    text-align: right;
+    color: #8899aa;
+    font-size: 0.75rem;
+  }
+
+  .intent-bar-track {
+    flex: 1;
+    height: 8px;
+    background: #333;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .intent-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: #4ecca3;
+    transition: width 0.3s;
+  }
+
+  .intent-bar-count {
+    min-width: 40px;
+    text-align: right;
+    color: #e0e0e0;
+    font-weight: 600;
+    font-size: 0.8rem;
+  }
+
+  .daily-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 120px;
+    padding-top: 0.5rem;
+  }
+
+  .daily-bar-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+  }
+
+  .daily-bar {
+    width: 100%;
+    min-width: 4px;
+    background: #4ecca3;
+    border-radius: 2px 2px 0 0;
+    transition: height 0.3s;
+  }
+
+  .daily-label {
+    font-size: 0.55rem;
+    color: #8899aa;
+    margin-top: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .query-list {
+    list-style: none;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .query-list li {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid rgba(15, 52, 96, 0.4);
+    font-size: 0.8rem;
+  }
+
+  .query-list li .query-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 0.75rem;
+  }
+
+  .query-list li .query-count {
+    font-weight: 600;
+    color: #4ecca3;
+    white-space: nowrap;
+  }
+
+  .query-list li .query-intent {
+    font-size: 0.7rem;
+    color: #8899aa;
+    margin-left: 0.5rem;
+  }
+
   @media (max-width: 768px) {
     header { padding: 1rem; }
     main { padding: 1rem; }
@@ -312,6 +440,7 @@ export function getDashboardHTML(): string {
     .stat-card { min-width: 100px; padding: 0.5rem 0.75rem; }
     .stat-card .stat-value { font-size: 1.2rem; }
     .form-group input, .form-group select { min-width: 100px; }
+    .analytics-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -465,6 +594,29 @@ export function getDashboardHTML(): string {
         <div class="stat-value" id="user-forwards">-</div>
         <div class="stat-label">Total Forwards</div>
       </div>
+    </div>
+  </div>
+
+  <!-- Analytics Section -->
+  <div class="section" id="analytics-section">
+    <div class="section-header">
+      <h2>Analytics</h2>
+    </div>
+    <div class="analytics-grid">
+      <div class="analytics-panel">
+        <h3>Intent Distribution</h3>
+        <div id="intent-chart"></div>
+      </div>
+      <div class="analytics-panel">
+        <h3>Daily Volume (Last 30 Days)</h3>
+        <div class="daily-chart" id="daily-chart"></div>
+      </div>
+    </div>
+    <div class="analytics-panel" style="margin-top: 1rem;">
+      <h3>Top Queries</h3>
+      <ul class="query-list" id="top-queries-list">
+        <li class="empty-state">Loading...</li>
+      </ul>
     </div>
   </div>
 
@@ -722,10 +874,92 @@ export function getDashboardHTML(): string {
     });
   }
 
+  // ─── Analytics ─────────────────────────────────────────────
+
+  var INTENT_COLORS = {
+    event_query: '#4ecca3',
+    venue_query: '#64b5f6',
+    local_info: '#ffb74d',
+    forward_content: '#ce93d8',
+    onboarding: '#4dd0e1',
+    feedback: '#aed581',
+    unknown: '#e94560'
+  };
+
+  function loadIntentChart() {
+    api('GET', '/admin/api/analytics/intents').then(function(data) {
+      var container = document.getElementById('intent-chart');
+      if (!data || !data.length) {
+        container.innerHTML = '<div class="empty-state">No analytics data yet</div>';
+        return;
+      }
+      var maxCount = Math.max.apply(null, data.map(function(d) { return d.count; }));
+      container.innerHTML = data.map(function(d) {
+        var pct = maxCount > 0 ? Math.round((d.count / maxCount) * 100) : 0;
+        var color = INTENT_COLORS[d.intent] || '#4ecca3';
+        return '<div class="intent-bar-row">' +
+          '<span class="intent-bar-label">' + escapeHtml(d.intent) + '</span>' +
+          '<div class="intent-bar-track"><div class="intent-bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>' +
+          '<span class="intent-bar-count">' + d.count + '</span>' +
+        '</div>';
+      }).join('');
+    }).catch(function(err) {
+      console.error('Failed to load intent chart:', err);
+    });
+  }
+
+  function loadDailyChart() {
+    api('GET', '/admin/api/analytics/daily').then(function(data) {
+      var container = document.getElementById('daily-chart');
+      if (!data || !data.length) {
+        container.innerHTML = '<div class="empty-state" style="width:100%;display:flex;align-items:center;justify-content:center;">No daily data yet</div>';
+        return;
+      }
+      var maxCount = Math.max.apply(null, data.map(function(d) { return d.count; }));
+      container.innerHTML = data.map(function(d) {
+        var pct = maxCount > 0 ? Math.round((d.count / maxCount) * 100) : 0;
+        var dt = new Date(d.date + 'T00:00:00');
+        var label = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return '<div class="daily-bar-wrap" title="' + label + ': ' + d.count + ' queries">' +
+          '<div class="daily-bar" style="height:' + Math.max(pct, 2) + '%"></div>' +
+          '<span class="daily-label">' + label + '</span>' +
+        '</div>';
+      }).join('');
+    }).catch(function(err) {
+      console.error('Failed to load daily chart:', err);
+    });
+  }
+
+  function loadTopQueries() {
+    api('GET', '/admin/api/analytics/top-queries').then(function(data) {
+      var list = document.getElementById('top-queries-list');
+      if (!data || !data.length) {
+        list.innerHTML = '<li class="empty-state">No queries recorded yet</li>';
+        return;
+      }
+      list.innerHTML = data.map(function(d) {
+        return '<li>' +
+          '<span class="query-text">' + escapeHtml(d.query || '(empty)') + '</span>' +
+          '<span class="query-intent">' + escapeHtml(d.intent) + '</span>' +
+          '<span class="query-count">' + d.count + '</span>' +
+        '</li>';
+      }).join('');
+    }).catch(function(err) {
+      console.error('Failed to load top queries:', err);
+    });
+  }
+
+  function loadAnalytics() {
+    loadIntentChart();
+    loadDailyChart();
+    loadTopQueries();
+  }
+
   // Initial load
   loadStats();
   loadSources();
   fetchEvents();
+  loadAnalytics();
 </script>
 </body>
 </html>`;

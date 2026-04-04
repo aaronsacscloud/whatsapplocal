@@ -3,6 +3,7 @@ import { sendTextMessage } from "../whatsapp/sender.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getWeatherContext } from "../knowledge/weather.js";
+import type { ConversationMessage } from "../llm/responder.js";
 
 const LOCAL_INFO_SYSTEM = `Eres un experto local de San Miguel de Allende, Mexico. Conoces la ciudad como la palma de tu mano.
 Responde siempre en español informal pero respetuoso. Se conciso y directo.
@@ -12,13 +13,25 @@ Maximo 500 caracteres por respuesta (es WhatsApp, no un blog).
 Usa emojis con moderación (1-2 max).
 Termina con una pregunta de seguimiento o sugerencia relacionada.`;
 
+const LOCAL_INFO_SYSTEM_EN = `You are a local expert on San Miguel de Allende, Mexico. You know the city like the back of your hand.
+Always respond in casual but respectful English. Be concise and direct.
+Use your local knowledge to give precise answers with specific names, addresses, prices when you know them.
+If you're asked something you're not sure about, say so honestly but suggest alternatives.
+Maximum 500 characters per response (it's WhatsApp, not a blog).
+Use emojis sparingly (1-2 max).
+End with a follow-up question or related suggestion.`;
+
 export async function handleLocalInfo(
   from: string,
-  body: string
-): Promise<void> {
+  body: string,
+  conversationHistory: ConversationMessage[] = [],
+  language: "es" | "en" = "es"
+): Promise<string> {
   const logger = getLogger();
   const client = getLLMClient();
   const knowledge = getLocalKnowledge();
+
+  const isEnglish = language === "en";
 
   // Fetch weather if the question might be about climate/weather/what to wear
   let weatherContext = "";
@@ -31,39 +44,71 @@ export async function handleLocalInfo(
     lowerBody.includes("temperatura") ||
     lowerBody.includes("que llevo") ||
     lowerBody.includes("ropa") ||
-    lowerBody.includes("weather")
+    lowerBody.includes("weather") ||
+    lowerBody.includes("rain") ||
+    lowerBody.includes("cold") ||
+    lowerBody.includes("hot") ||
+    lowerBody.includes("temperature") ||
+    lowerBody.includes("what to wear") ||
+    lowerBody.includes("pack")
   ) {
     weatherContext = await getWeatherContext();
   }
+
+  const systemPrompt = isEnglish ? LOCAL_INFO_SYSTEM_EN : LOCAL_INFO_SYSTEM;
 
   try {
     const contextParts = [knowledge];
     if (weatherContext) contextParts.push(weatherContext);
 
+    // Build messages array: history + current message
+    const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+    // Add conversation history
+    for (const msg of conversationHistory) {
+      messages.push({
+        role: msg.role,
+        content: msg.content,
+      });
+    }
+
+    const contextLabel = isEnglish
+      ? "LOCAL CONTEXT (use this to answer accurately — data is in Spanish, respond in English):"
+      : "CONTEXTO LOCAL (usa esto para responder con precisión):";
+
+    const questionLabel = isEnglish ? "USER QUESTION" : "PREGUNTA DEL USUARIO";
+
+    // Add current message with context
+    messages.push({
+      role: "user",
+      content: `${contextLabel}\n${contextParts.join("\n\n")}\n\n---\n${questionLabel}: "${body}"`,
+    });
+
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 600,
-      system: LOCAL_INFO_SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: `CONTEXTO LOCAL (usa esto para responder con precisión):\n${contextParts.join("\n\n")}\n\n---\nPREGUNTA DEL USUARIO: "${body}"`,
-        },
-      ],
+      system: systemPrompt,
+      messages,
     });
 
     const text =
       response.content[0].type === "text" ? response.content[0].text : "";
 
-    await sendTextMessage(
-      from,
-      text || "No tengo info sobre eso ahora. Intenta preguntar de otra forma."
-    );
+    const fallback = isEnglish
+      ? "I don't have info on that right now. Try asking a different way."
+      : "No tengo info sobre eso ahora. Intenta preguntar de otra forma.";
+
+    const responseText = text || fallback;
+
+    await sendTextMessage(from, responseText);
+
+    return responseText;
   } catch (error) {
     logger.error({ error }, "Local info handler failed");
-    await sendTextMessage(
-      from,
-      "Estamos experimentando problemas. Intenta de nuevo en unos minutos."
-    );
+    const errorText = isEnglish
+      ? "We're experiencing issues. Please try again in a few minutes."
+      : "Estamos experimentando problemas. Intenta de nuevo en unos minutos.";
+    await sendTextMessage(from, errorText);
+    return errorText;
   }
 }
