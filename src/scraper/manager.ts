@@ -9,6 +9,7 @@ import {
   recordScrapeFailure,
 } from "./health.js";
 import { upsertEvent } from "../events/repository.js";
+import { analyzeEventImage, enrichEventWithImageData } from "./image-enricher.js";
 import type { NewEvent } from "../db/schema.js";
 import { extractEvent } from "../llm/extractor.js";
 import { getConfig } from "../config.js";
@@ -171,16 +172,25 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
         source.url
       );
 
+      // Enrich events with LLM text extraction + image analysis
       for (const event of normalized) {
-        if (!event.category || event.category === "other") {
-          if (event.rawContent) {
-            const extraction = await extractEvent(event.rawContent);
-            if (extraction.category) {
-              event.category = extraction.category as any;
+        // Text-based enrichment
+        if ((!event.category || event.category === "other") && event.rawContent) {
+          const extraction = await extractEvent(event.rawContent);
+          if (extraction.category) event.category = extraction.category as any;
+          if (extraction.neighborhood && !event.neighborhood) event.neighborhood = extraction.neighborhood;
+        }
+
+        // Image-based enrichment: analyze the post image/flyer with Claude Vision
+        if (event.imageUrl) {
+          try {
+            const imageData = await analyzeEventImage(event.imageUrl);
+            if (imageData) {
+              enrichEventWithImageData(event, imageData);
+              logger.debug({ title: event.title }, "Event enriched from image");
             }
-            if (extraction.neighborhood && !event.neighborhood) {
-              event.neighborhood = extraction.neighborhood;
-            }
+          } catch {
+            // Skip image analysis failures silently
           }
         }
       }
