@@ -32,8 +32,8 @@ export async function sendImageMessage(
           name: "whatsapp_send_media",
           arguments: {
             conversation_selector: { phone_number: to },
-            media_type: "image",
-            media_url: imageUrl,
+            message_type: "image",
+            file_url: imageUrl,
             caption: caption || "",
           },
         },

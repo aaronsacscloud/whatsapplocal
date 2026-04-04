@@ -107,7 +107,7 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
       category: mapCategory(category || genres || ""),
       description: description.trim() || undefined,
       url: eventUrl
-        ? `https://sanmiguellive.com${eventUrl}`
+        ? (eventUrl.startsWith("http") ? eventUrl : `https://sanmiguellive.com${eventUrl}`)
         : undefined,
       imageUrl: imgMatch?.[1] || undefined,
     });
