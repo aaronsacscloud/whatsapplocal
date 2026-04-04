@@ -28,11 +28,17 @@ export async function upsertEvent(event: NewEvent): Promise<Event> {
             description: event.description,
             confidence: event.confidence,
             rawContent: event.rawContent,
+            scrapedAt: new Date(),
           })
           .where(eq(events.id, current.id))
           .returning();
         return updated;
       }
+      // Even if not updating, refresh scraped_at to mark as "seen again"
+      await db
+        .update(events)
+        .set({ scrapedAt: new Date() })
+        .where(eq(events.id, current.id));
       return current;
     }
   }
@@ -126,6 +132,7 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
       sql.raw(
         `SELECT * FROM events WHERE ${where}
          ORDER BY
+           COALESCE(freshness_score, 0.5) * COALESCE(confidence, 0.5) DESC,
            CASE content_type
              WHEN 'event' THEN event_date
              WHEN 'recurring' THEN ('2000-01-01 ' || COALESCE(recurrence_time, '23:59'))::timestamp
@@ -161,7 +168,7 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
   const where = conditions.join(" AND ") + sharedWhere;
 
   const result = await db.execute(
-    sql.raw(`SELECT * FROM events WHERE ${where} ORDER BY event_date ASC NULLS LAST LIMIT ${limit}`)
+    sql.raw(`SELECT * FROM events WHERE ${where} ORDER BY COALESCE(freshness_score, 0.5) * COALESCE(confidence, 0.5) DESC, event_date ASC NULLS LAST LIMIT ${limit}`)
   );
 
   return result as unknown as Event[];

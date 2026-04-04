@@ -1,10 +1,12 @@
 import { Router, json } from "express";
-import { eq, desc, sql, and, gte, lte, count } from "drizzle-orm";
+import { eq, desc, sql, and, gte, lte, lt, count } from "drizzle-orm";
 import { getDb } from "../db/index.js";
 import { sources, events, users, analytics } from "../db/schema.js";
 import { getDashboardHTML } from "./dashboard.js";
 import { getQRPageHTML } from "./qr.js";
 import { runScrapeAll } from "../scraper/manager.js";
+import { countStaleEvents } from "../scraper/freshness.js";
+import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
 
 export function createAdminRouter(): Router {
@@ -576,6 +578,127 @@ export function createAdminRouter(): Router {
       const logger = getLogger();
       logger.error({ error }, "Engagement metrics failed");
       res.status(500).json({ error: "Failed to load engagement metrics" });
+    }
+  });
+
+  // ─── Data Quality ��─────────────────────────────────────────
+
+  // GET /admin/api/quality — Data quality metrics
+  router.get("/admin/api/quality", async (_req, res) => {
+    try {
+      const db = getDb();
+      const config = getConfig();
+      const logger = getLogger();
+
+      // SMA timezone offset
+      const SMA_TZ = -6;
+      const now = new Date();
+      const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
+      const sma = new Date(smaMs);
+
+      // Events per day for next 7 days
+      const eventsPerDay: Array<{ date: string; count: number }> = [];
+      for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+        const dayStart = new Date(
+          Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate() + dayOffset) -
+            SMA_TZ * 3600000
+        );
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+        const result = await db
+          .select({ cnt: sql<number>`COUNT(*)` })
+          .from(events)
+          .where(
+            and(
+              sql`${events.city} = ${config.DEFAULT_CITY}`,
+              gte(events.eventDate, dayStart),
+              lt(events.eventDate, dayEnd)
+            )
+          );
+
+        const cnt = Number((result as unknown as Array<{ cnt: string }>)[0]?.cnt) || 0;
+        eventsPerDay.push({
+          date: dayStart.toISOString().split("T")[0],
+          count: cnt,
+        });
+      }
+
+      // Completeness metrics for future events
+      const futureStart = new Date(
+        Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) -
+          SMA_TZ * 3600000
+      );
+
+      const completenessResult = await db
+        .select({
+          total: sql<number>`COUNT(*)`,
+          withImage: sql<number>`COUNT(CASE WHEN ${events.imageUrl} IS NOT NULL THEN 1 END)`,
+          withPrice: sql<number>`COUNT(CASE WHEN ${events.price} IS NOT NULL THEN 1 END)`,
+          withDescription: sql<number>`COUNT(CASE WHEN ${events.description} IS NOT NULL AND LENGTH(${events.description}) > 10 THEN 1 END)`,
+          withVenue: sql<number>`COUNT(CASE WHEN ${events.venueAddress} IS NOT NULL THEN 1 END)`,
+        })
+        .from(events)
+        .where(
+          and(
+            sql`${events.city} = ${config.DEFAULT_CITY}`,
+            gte(events.eventDate, futureStart)
+          )
+        );
+
+      const c = completenessResult[0];
+
+      // Source quality ranking (top 10 sources by quality_score)
+      const sourceRanking = await db
+        .select({
+          name: sources.name,
+          qualityScore: sources.qualityScore,
+          eventsFound: sources.eventsFound,
+          totalScrapes: sources.totalScrapes,
+          successRate: sources.successRate,
+        })
+        .from(sources)
+        .where(eq(sources.isActive, true))
+        .orderBy(desc(sources.qualityScore))
+        .limit(10);
+
+      // Stale events count
+      const staleCount = await countStaleEvents();
+
+      // Duplicates merged today (approximate: events updated today with source_count > 1)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+
+      const [mergedTodayResult] = await db
+        .select({ cnt: sql<number>`COUNT(*)` })
+        .from(events)
+        .where(
+          and(
+            sql`${events.sourceCount} > 1`,
+            gte(events.scrapedAt, todayStart)
+          )
+        );
+
+      const duplicatesMergedToday = Number(
+        (mergedTodayResult as unknown as { cnt: string })?.cnt
+      ) || 0;
+
+      res.json({
+        eventsPerDay,
+        completeness: {
+          withImage: Number(c?.withImage) || 0,
+          withPrice: Number(c?.withPrice) || 0,
+          withDescription: Number(c?.withDescription) || 0,
+          withVenue: Number(c?.withVenue) || 0,
+          total: Number(c?.total) || 0,
+        },
+        sourceRanking,
+        staleEvents: staleCount,
+        duplicatesMergedToday,
+      });
+    } catch (error) {
+      const logger = getLogger();
+      logger.error({ error }, "Admin quality API failed");
+      res.status(500).json({ error: "Failed to load quality data" });
     }
   });
 

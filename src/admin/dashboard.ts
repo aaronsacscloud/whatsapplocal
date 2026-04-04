@@ -651,6 +651,51 @@ export function getDashboardHTML(): string {
     </div>
   </div>
 
+  <!-- Data Quality Section -->
+  <div class="section" id="quality-section">
+    <div class="section-header">
+      <h2>Data Quality</h2>
+    </div>
+    <div class="stats-row" style="margin-bottom:1.25rem">
+      <div class="stat-card">
+        <div class="stat-value" id="quality-total-future">-</div>
+        <div class="stat-label">Future Events</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="quality-stale">-</div>
+        <div class="stat-label">Stale Events</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="quality-merged-today">-</div>
+        <div class="stat-label">Merged Today</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="quality-completeness">-</div>
+        <div class="stat-label">Avg Completeness</div>
+      </div>
+    </div>
+    <div class="analytics-grid">
+      <div class="analytics-panel">
+        <h3>Events per Day (Next 7 Days)</h3>
+        <div class="daily-chart" id="quality-events-chart"></div>
+      </div>
+      <div class="analytics-panel">
+        <h3>Completeness</h3>
+        <div id="quality-completeness-bars"></div>
+      </div>
+    </div>
+    <div class="analytics-grid" style="margin-top:1rem">
+      <div class="analytics-panel">
+        <h3>Top Sources by Quality</h3>
+        <div id="quality-source-ranking"></div>
+      </div>
+      <div class="analytics-panel">
+        <h3>Coverage Gaps</h3>
+        <div id="quality-coverage-gaps" style="font-size:0.85rem;color:#e0e0e0;"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Analytics Section -->
   <div class="section" id="analytics-section">
     <div class="section-header">
@@ -1098,12 +1143,102 @@ export function getDashboardHTML(): string {
     loadEngagementMetrics();
   }
 
+  // ─── Data Quality ───────────────────────────────────────────
+
+  function loadDataQuality() {
+    api('GET', '/admin/api/quality').then(function(data) {
+      // Stats cards
+      document.getElementById('quality-total-future').textContent = data.completeness.total || 0;
+      document.getElementById('quality-stale').textContent = data.staleEvents || 0;
+      document.getElementById('quality-merged-today').textContent = data.duplicatesMergedToday || 0;
+
+      // Average completeness percentage
+      var total = data.completeness.total || 1;
+      var avgCompleteness = Math.round(
+        ((data.completeness.withImage + data.completeness.withPrice +
+          data.completeness.withDescription + data.completeness.withVenue) / (total * 4)) * 100
+      );
+      document.getElementById('quality-completeness').textContent = avgCompleteness + '%';
+
+      // Events per day bar chart
+      var chartContainer = document.getElementById('quality-events-chart');
+      if (data.eventsPerDay && data.eventsPerDay.length > 0) {
+        var maxCount = Math.max.apply(null, data.eventsPerDay.map(function(d) { return d.count; }));
+        if (maxCount === 0) maxCount = 1;
+        chartContainer.innerHTML = data.eventsPerDay.map(function(d) {
+          var pct = Math.round((d.count / maxCount) * 100);
+          var dt = new Date(d.date + 'T00:00:00');
+          var label = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+          var barColor = d.count < 3 ? '#e94560' : d.count < 5 ? '#ffb74d' : '#4ecca3';
+          return '<div class="daily-bar-wrap" title="' + label + ': ' + d.count + ' events">' +
+            '<div class="daily-bar" style="height:' + Math.max(pct, 4) + '%;background:' + barColor + '"></div>' +
+            '<span class="daily-label">' + label + '</span>' +
+          '</div>';
+        }).join('');
+      } else {
+        chartContainer.innerHTML = '<div class="empty-state" style="width:100%;display:flex;align-items:center;justify-content:center;">No data</div>';
+      }
+
+      // Completeness bars
+      var compContainer = document.getElementById('quality-completeness-bars');
+      var metrics = [
+        { label: 'Image', value: data.completeness.withImage, color: '#4ecca3' },
+        { label: 'Description', value: data.completeness.withDescription, color: '#64b5f6' },
+        { label: 'Price', value: data.completeness.withPrice, color: '#ffb74d' },
+        { label: 'Venue Address', value: data.completeness.withVenue, color: '#ce93d8' }
+      ];
+      compContainer.innerHTML = metrics.map(function(m) {
+        var pct = total > 0 ? Math.round((m.value / total) * 100) : 0;
+        return '<div class="intent-bar-row">' +
+          '<span class="intent-bar-label">' + m.label + '</span>' +
+          '<div class="intent-bar-track"><div class="intent-bar-fill" style="width:' + pct + '%;background:' + m.color + '"></div></div>' +
+          '<span class="intent-bar-count">' + pct + '% (' + m.value + ')</span>' +
+        '</div>';
+      }).join('');
+
+      // Source ranking
+      var rankContainer = document.getElementById('quality-source-ranking');
+      if (data.sourceRanking && data.sourceRanking.length > 0) {
+        var maxQ = Math.max.apply(null, data.sourceRanking.map(function(s) { return s.qualityScore || 0; }));
+        if (maxQ === 0) maxQ = 1;
+        rankContainer.innerHTML = data.sourceRanking.map(function(s) {
+          var score = (s.qualityScore || 0);
+          var pct = Math.round((score / maxQ) * 100);
+          return '<div class="intent-bar-row">' +
+            '<span class="intent-bar-label" style="min-width:120px;">' + escapeHtml(s.name) + '</span>' +
+            '<div class="intent-bar-track"><div class="intent-bar-fill" style="width:' + pct + '%;background:#4ecca3"></div></div>' +
+            '<span class="intent-bar-count">' + score.toFixed(2) + '</span>' +
+          '</div>';
+        }).join('');
+      } else {
+        rankContainer.innerHTML = '<div class="empty-state">No source data</div>';
+      }
+
+      // Coverage gaps
+      var gapsContainer = document.getElementById('quality-coverage-gaps');
+      var lowDays = data.eventsPerDay.filter(function(d) { return d.count < 3; });
+      if (lowDays.length > 0) {
+        gapsContainer.innerHTML = '<div style="color:#e94560;margin-bottom:0.5rem;font-weight:600;">Low Coverage Days (&lt;3 events):</div>' +
+          lowDays.map(function(d) {
+            var dt = new Date(d.date + 'T00:00:00');
+            var label = dt.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+            return '<div style="margin-bottom:0.25rem;">' + label + ': <strong>' + d.count + '</strong> events</div>';
+          }).join('');
+      } else {
+        gapsContainer.innerHTML = '<div style="color:#4ecca3;font-weight:600;">All days have good coverage (3+ events)</div>';
+      }
+    }).catch(function(err) {
+      console.error('Failed to load data quality:', err);
+    });
+  }
+
   // Initial load
   loadStats();
   loadSources();
   fetchEvents();
   loadAnalytics();
   loadMetrics();
+  loadDataQuality();
 </script>
 </body>
 </html>`;

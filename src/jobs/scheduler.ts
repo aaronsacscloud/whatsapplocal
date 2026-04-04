@@ -8,6 +8,7 @@ import { executeExpireJob } from "./expire-job.js";
 import { executeHealthCheckJob } from "./health-check-job.js";
 import { executeDailyDigest } from "./daily-digest.js";
 import { executeAlertChecker } from "./alert-checker.js";
+import { executeDataQualityJob } from "./data-quality.js";
 
 export async function shouldRunJob(
   jobName: string,
@@ -51,14 +52,28 @@ export async function updateJobState(
 export function startScheduler(): void {
   const logger = getLogger();
 
-  // Scrape every 4 hours
+  // 9:00 AM SMA (15:00 UTC) - Data quality check + cleanup (runs before digest)
+  cron.schedule("0 15 * * *", () => {
+    executeDataQualityJob().catch((error) => {
+      logger.error({ error }, "Scheduled data quality job failed");
+    });
+  });
+
+  // 10:00 AM SMA (16:00 UTC) - Daily digest to users
+  cron.schedule("0 16 * * *", () => {
+    executeDailyDigest().catch((error) => {
+      logger.error({ error }, "Scheduled daily digest failed");
+    });
+  });
+
+  // Every 4 hours - Smart scrape (sanmiguellive + bandsintown always, FB only if needed)
   cron.schedule("0 */4 * * *", () => {
     executeScrapeJob().catch((error) => {
       logger.error({ error }, "Scheduled scrape job failed");
     });
   });
 
-  // Expire old events every hour
+  // Every 1 hour - Expire old events + clean processed messages
   cron.schedule("30 * * * *", () => {
     executeExpireJob().catch((error) => {
       logger.error({ error }, "Scheduled expire job failed");
@@ -72,13 +87,6 @@ export function startScheduler(): void {
     });
   });
 
-  // Daily digest at 10:00 AM SMA time (16:00 UTC)
-  cron.schedule("0 16 * * *", () => {
-    executeDailyDigest().catch((error) => {
-      logger.error({ error }, "Scheduled daily digest failed");
-    });
-  });
-
   // Alert checker every 2 hours
   cron.schedule("0 */2 * * *", () => {
     executeAlertChecker().catch((error) => {
@@ -86,5 +94,7 @@ export function startScheduler(): void {
     });
   });
 
-  logger.info("Scheduler started: scrape (4h), expire (1h), health (30m), digest (daily 10am SMA), alerts (2h)");
+  logger.info(
+    "Scheduler started: quality (9am SMA), digest (10am SMA), scrape (4h), expire (1h), health (30m), alerts (2h)"
+  );
 }

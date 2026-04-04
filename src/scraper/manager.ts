@@ -11,6 +11,9 @@ import {
 import { updateSourceQuality, getSourcesByQuality, shouldSkipSource } from "./source-quality.js";
 import { upsertEvent, countEventsForDate, deleteEventsOlderThan } from "../events/repository.js";
 import { analyzeEventImage, enrichEventWithImageData } from "./image-enricher.js";
+import { validateAndSanitize } from "./validator.js";
+import { crossSourceDedup } from "./smart-dedup.js";
+import { recalculateAllFreshness } from "./freshness.js";
 import type { NewEvent } from "../db/schema.js";
 import type { ApifyFacebookPost } from "./apify.js";
 import { extractEvent } from "../llm/extractor.js";
@@ -21,6 +24,8 @@ export interface ScrapeResult {
   sourcesProcessed: number;
   eventsInserted: number;
   duplicatesSkipped: number;
+  eventsRejected: number;
+  duplicatesMerged: number;
   errors: number;
 }
 
@@ -35,17 +40,21 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
     sourcesProcessed: 0,
     eventsInserted: 0,
     duplicatesSkipped: 0,
+    eventsRejected: 0,
+    duplicatesMerged: 0,
     errors: 0,
   };
 
   // Phase 1: Web scrapers (free, fast)
   logger.info("Starting web scraper phase");
   const webEvents = await runWebScrapers();
+  const { valid: webValidated, rejected: webRejected } = validateAndSanitize(webEvents);
+  result.eventsRejected += webRejected;
   const { unique: webUnique, duplicates: webDups } =
-    await deduplicateEvents(webEvents);
+    await deduplicateEvents(webValidated);
 
   for (const event of webUnique) {
-    await upsertEvent(event);
+    await upsertEvent({ ...event, scrapedAt: new Date() });
   }
 
   result.sourcesProcessed += 2;
@@ -53,7 +62,7 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
   result.duplicatesSkipped += webDups;
 
   logger.info(
-    { webEvents: webEvents.length, inserted: webUnique.length, dups: webDups },
+    { webEvents: webEvents.length, validated: webValidated.length, inserted: webUnique.length, dups: webDups, rejected: webRejected },
     "Web scraper phase complete"
   );
 
@@ -65,6 +74,7 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
     result.sourcesProcessed += apifyResult.sourcesProcessed;
     result.eventsInserted += apifyResult.eventsInserted;
     result.duplicatesSkipped += apifyResult.duplicatesSkipped;
+    result.eventsRejected += apifyResult.eventsRejected;
     result.errors += apifyResult.errors;
   } else {
     logger.info("Skipping Apify phase (no API token)");
@@ -73,11 +83,13 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
   // Phase 3: Platform scrapers (Eventbrite, Bandsintown - free)
   logger.info("Starting platform scraper phase");
   const platformEvents = await runPlatformScrapers();
+  const { valid: platValidated, rejected: platRejected } = validateAndSanitize(platformEvents);
+  result.eventsRejected += platRejected;
   const { unique: platUnique, duplicates: platDups } =
-    await deduplicateEvents(platformEvents);
+    await deduplicateEvents(platValidated);
 
   for (const event of platUnique) {
-    await upsertEvent(event);
+    await upsertEvent({ ...event, scrapedAt: new Date() });
   }
 
   result.sourcesProcessed += 2;
@@ -88,6 +100,21 @@ export async function runScrapeAll(): Promise<ScrapeResult> {
     { platformEvents: platformEvents.length, inserted: platUnique.length },
     "Platform scraper phase complete"
   );
+
+  // Phase 4: Cross-source dedup + freshness
+  try {
+    const dedupReport = await crossSourceDedup();
+    result.duplicatesMerged += dedupReport.eventsMerged;
+    logger.info(dedupReport, "Cross-source dedup complete");
+  } catch (error) {
+    logger.error({ error }, "Cross-source dedup failed");
+  }
+
+  try {
+    await recalculateAllFreshness();
+  } catch (error) {
+    logger.error({ error }, "Freshness recalculation failed");
+  }
 
   logger.info(result, "Full scrape cycle complete");
   return result;
@@ -157,6 +184,8 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
     sourcesProcessed: 0,
     eventsInserted: 0,
     duplicatesSkipped: 0,
+    eventsRejected: 0,
+    duplicatesMerged: 0,
     errors: 0,
   };
 
@@ -179,10 +208,12 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
   // Step 2: Always scrape free sources (web scrapers + platforms)
   logger.info("Smart scrape: running free scrapers");
   const webEvents = await runWebScrapers();
-  const { unique: webUnique, duplicates: webDups } = await deduplicateEvents(webEvents);
+  const { valid: webValidated, rejected: webRejected } = validateAndSanitize(webEvents);
+  result.eventsRejected += webRejected;
+  const { unique: webUnique, duplicates: webDups } = await deduplicateEvents(webValidated);
 
   for (const event of webUnique) {
-    await upsertEvent(event);
+    await upsertEvent({ ...event, scrapedAt: new Date() });
   }
 
   result.sourcesProcessed += 2;
@@ -191,10 +222,12 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
 
   // Platform scrapers
   const platformEvents = await runPlatformScrapers();
-  const { unique: platUnique, duplicates: platDups } = await deduplicateEvents(platformEvents);
+  const { valid: platValidated, rejected: platRejected } = validateAndSanitize(platformEvents);
+  result.eventsRejected += platRejected;
+  const { unique: platUnique, duplicates: platDups } = await deduplicateEvents(platValidated);
 
   for (const event of platUnique) {
-    await upsertEvent(event);
+    await upsertEvent({ ...event, scrapedAt: new Date() });
   }
 
   result.sourcesProcessed += 2;
@@ -202,7 +235,7 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
   result.duplicatesSkipped += platDups;
 
   logger.info(
-    { webInserted: webUnique.length, platformInserted: platUnique.length },
+    { webInserted: webUnique.length, platformInserted: platUnique.length, rejected: result.eventsRejected },
     "Free scraper phase complete"
   );
 
@@ -224,6 +257,7 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
     result.sourcesProcessed += apifyResult.sourcesProcessed;
     result.eventsInserted += apifyResult.eventsInserted;
     result.duplicatesSkipped += apifyResult.duplicatesSkipped;
+    result.eventsRejected += apifyResult.eventsRejected;
     result.errors += apifyResult.errors;
   } else {
     logger.info(
@@ -232,7 +266,34 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
     );
   }
 
-  logger.info(result, "Smart scrape cycle complete");
+  // Step 4: After ALL scrapers finish, run cross-source dedup + freshness
+  try {
+    const dedupReport = await crossSourceDedup();
+    result.duplicatesMerged += dedupReport.eventsMerged;
+    logger.info(dedupReport, "Cross-source dedup complete");
+  } catch (error) {
+    logger.error({ error }, "Cross-source dedup failed");
+  }
+
+  try {
+    await recalculateAllFreshness();
+  } catch (error) {
+    logger.error({ error }, "Freshness recalculation failed");
+  }
+
+  // Log a scrape report
+  logger.info(
+    {
+      sourcesProcessed: result.sourcesProcessed,
+      eventsInserted: result.eventsInserted,
+      duplicatesMerged: result.duplicatesMerged,
+      duplicatesSkipped: result.duplicatesSkipped,
+      eventsRejected: result.eventsRejected,
+      errors: result.errors,
+    },
+    `Scraped ${result.sourcesProcessed} sources, found ${result.eventsInserted} new events, merged ${result.duplicatesMerged} duplicates, rejected ${result.eventsRejected}`
+  );
+
   return result;
 }
 
@@ -301,6 +362,8 @@ export async function runApifyScrapers(
     sourcesProcessed: 0,
     eventsInserted: 0,
     duplicatesSkipped: 0,
+    eventsRejected: 0,
+    duplicatesMerged: 0,
     errors: 0,
   };
 
@@ -315,10 +378,14 @@ export async function runApifyScrapers(
         logger
       );
 
-      const { unique, duplicates } = await deduplicateEvents(scrapeStats.events);
+      // Validate and sanitize before dedup
+      const { valid: validated, rejected } = validateAndSanitize(scrapeStats.events);
+      result.eventsRejected += rejected;
+
+      const { unique, duplicates } = await deduplicateEvents(validated);
 
       for (const event of unique) {
-        await upsertEvent(event);
+        await upsertEvent({ ...event, scrapedAt: new Date() });
       }
 
       await recordScrapeSuccess(source.id);
