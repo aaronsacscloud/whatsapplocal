@@ -255,6 +255,73 @@ function isLikelySpanish(text: string): boolean {
   return esCount > enCount && esCount >= 2;
 }
 
+/**
+ * Enrich events that have poor/missing descriptions.
+ * Uses Haiku to generate a brief, useful description based on title + venue + genre.
+ */
+async function enrichDescriptions(events: Event[], language: "es" | "en"): Promise<Event[]> {
+  const logger = getLogger();
+  const isEn = language === "en";
+
+  // Find events with poor descriptions
+  const needsEnrichment: Array<{ index: number; title: string; venue: string; desc: string }> = [];
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as any;
+    const desc = e.description || "";
+    const title = e.title || "";
+    const venue = e.venueName || e.venue_name || "";
+
+    // Description is poor if: empty, only genre info, just repeats title, or very short
+    const isPoor =
+      desc.length < 20 ||
+      desc.startsWith("Genero:") ||
+      desc.startsWith("Concierto de ") ||
+      desc.toLowerCase() === title.toLowerCase();
+
+    if (isPoor) {
+      needsEnrichment.push({ index: i, title, venue, desc });
+    }
+  }
+
+  if (needsEnrichment.length === 0) return events;
+
+  try {
+    const client = getLLMClient();
+    const langLabel = isEn ? "English" : "Spanish";
+
+    const prompt = needsEnrichment
+      .map((e, i) => `[${i}] Title: "${e.title}" | Venue: "${e.venue}" | Info: "${e.desc}"`)
+      .join("\n");
+
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 800,
+      system: `Write a brief, appealing 1-2 sentence description for each event in ${langLabel}. Make it sound interesting and give context about what to expect. Keep the [N] numbering. Be concise (max 100 chars each). Don't invent details, just make the existing info sound good.`,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const resultText = response.content[0].type === "text" ? response.content[0].text : "";
+
+    const enriched = [...events] as any[];
+    for (const line of resultText.split("\n")) {
+      const match = line.match(/^\[(\d+)\]\s*(.+)/);
+      if (match) {
+        const idx = parseInt(match[1], 10);
+        if (idx >= 0 && idx < needsEnrichment.length) {
+          const { index } = needsEnrichment[idx];
+          enriched[index] = { ...enriched[index], description: match[2].trim() };
+        }
+      }
+    }
+
+    return enriched;
+  } catch (error) {
+    logger.debug({ error }, "Description enrichment failed, using originals");
+    return events;
+  }
+}
+
 function getCategoryEmoji(category: string | null): string {
   const emojis: Record<string, string> = {
     music: "🎵", food: "🍽️", nightlife: "🌙", culture: "🎨",
@@ -339,18 +406,23 @@ async function sendStructuredEventCards(
   const maxEvents = 8;
   const eventsToShow = sorted.slice(0, maxEvents);
 
-  // Translate titles and descriptions to user's language if needed
-  const translatedEvents = await translateEventsIfNeeded(eventsToShow, language);
+  // Enrich poor descriptions and translate to user's language
+  const enrichedEvents = await enrichDescriptions(eventsToShow, language);
+  const translatedEvents = await translateEventsIfNeeded(enrichedEvents, language);
 
   // Build all card messages
   const cardMessages: Array<{ imageUrl?: string; imageCaption?: string; text: string }> = [];
 
   for (const event of translatedEvents) {
-    const imgUrl = (event as any).imageUrl || (event as any).image_url;
+    let imgUrl = (event as any).imageUrl || (event as any).image_url || "";
+    // Validate image URL: must be full URL and at least 5 chars
+    if (imgUrl.length < 10 || !imgUrl.startsWith("http")) {
+      imgUrl = "";
+    }
     const card = formatEventCard(event, language);
 
     cardMessages.push({
-      imageUrl: imgUrl && imgUrl.startsWith("http") ? imgUrl : undefined,
+      imageUrl: imgUrl || undefined,
       imageCaption: (event as any).title,
       text: card,
     });

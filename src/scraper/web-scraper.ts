@@ -123,7 +123,9 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
       url: eventUrl
         ? (eventUrl.startsWith("http") ? eventUrl : `https://sanmiguellive.com${eventUrl}`)
         : undefined,
-      imageUrl: imgMatch?.[1] || undefined,
+      imageUrl: imgMatch?.[1]
+        ? (imgMatch[1].startsWith("http") ? imgMatch[1] : `https://sanmiguellive.com${imgMatch[1]}`)
+        : undefined,
     });
   }
 
