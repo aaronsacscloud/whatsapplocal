@@ -1,15 +1,8 @@
 import type { Event } from "../db/schema.js";
 
-/**
- * In-memory cache of recently shown events per user phone.
- * Used for "add to calendar" and "share" features to know which events
- * were recently displayed to a user.
- *
- * TTL: 30 minutes. Cleared on visibility change or process restart.
- */
-
 interface CachedEvents {
-  events: Event[];
+  allEvents: Event[];      // ALL events from the last query
+  shownCount: number;      // How many we've shown so far
   timestamp: number;
 }
 
@@ -17,25 +10,32 @@ const TTL_MS = 30 * 60 * 1000; // 30 minutes
 const recentEventsCache = new Map<string, CachedEvents>();
 
 /**
- * Store events that were just shown to a user.
+ * Store ALL events from a query, reset shown count.
  */
 export function storeRecentEvents(phone: string, events: Event[]): void {
   recentEventsCache.set(phone, {
-    events,
+    allEvents: events,
+    shownCount: 0,
     timestamp: Date.now(),
   });
 
-  // Prune old entries periodically
-  if (recentEventsCache.size > 500) {
-    pruneCache();
+  if (recentEventsCache.size > 500) pruneCache();
+}
+
+/**
+ * Mark N events as shown.
+ */
+export function markEventsShown(phone: string, count: number): void {
+  const cached = recentEventsCache.get(phone);
+  if (cached) {
+    cached.shownCount = count;
   }
 }
 
 /**
- * Get recently shown events for a user.
- * Returns empty array if none cached or if TTL expired.
+ * Get events that haven't been shown yet (for "show me more").
  */
-export function getRecentEvents(phone: string): Event[] {
+export function getNextEvents(phone: string, batchSize: number = 8): Event[] {
   const cached = recentEventsCache.get(phone);
   if (!cached) return [];
 
@@ -44,12 +44,35 @@ export function getRecentEvents(phone: string): Event[] {
     return [];
   }
 
-  return cached.events;
+  const start = cached.shownCount;
+  const next = cached.allEvents.slice(start, start + batchSize);
+
+  // Update shown count
+  cached.shownCount = start + next.length;
+
+  return next;
 }
 
 /**
- * Remove expired entries from cache.
+ * Get the count of remaining unshown events.
  */
+export function getRemainingCount(phone: string): number {
+  const cached = recentEventsCache.get(phone);
+  if (!cached) return 0;
+  if (Date.now() - cached.timestamp > TTL_MS) return 0;
+  return Math.max(0, cached.allEvents.length - cached.shownCount);
+}
+
+/**
+ * Get recently shown events (for calendar/share features).
+ */
+export function getRecentEvents(phone: string): Event[] {
+  const cached = recentEventsCache.get(phone);
+  if (!cached) return [];
+  if (Date.now() - cached.timestamp > TTL_MS) return [];
+  return cached.allEvents.slice(0, cached.shownCount);
+}
+
 function pruneCache(): void {
   const now = Date.now();
   for (const [key, value] of recentEventsCache) {

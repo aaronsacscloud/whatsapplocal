@@ -4,6 +4,7 @@ import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getGoogleMapsUrl } from "../utils/maps.js";
 import { sendImageMessage, sendTextMessage } from "../whatsapp/sender.js";
+import { storeRecentEvents, markEventsShown, getNextEvents, getRemainingCount } from "../handlers/event-context.js";
 import type { Event } from "../db/schema.js";
 
 export interface ConversationMessage {
@@ -322,6 +323,17 @@ async function enrichDescriptions(events: Event[], language: "es" | "en"): Promi
   }
 }
 
+function isAskingForMore(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+  const morePatterns = [
+    /dame.*m[aá]s/i, /los otros/i, /los dem[aá]s/i, /show me more/i,
+    /more events/i, /ver m[aá]s/i, /siguiente/i, /next/i, /continua/i,
+    /continue/i, /m[aá]s eventos/i, /otros eventos/i, /the rest/i,
+    /dame los/i, /muestrame/i, /muéstrame/i, /pideme/i, /pídeme/i,
+  ];
+  return morePatterns.some((p) => p.test(lower));
+}
+
 function getCategoryEmoji(category: string | null): string {
   const emojis: Record<string, string> = {
     music: "🎵", food: "🍽️", nightlife: "🌙", culture: "🎨",
@@ -369,8 +381,21 @@ export async function generateResponse(
   // Deduplicate events by title
   const uniqueEvents = deduplicateByTitle(events);
 
-  if (uniqueEvents.length > 0) {
+  if (uniqueEvents.length > 0 && userPhone) {
+    // Store ALL events for pagination
+    storeRecentEvents(userPhone, uniqueEvents);
     return sendStructuredEventCards(uniqueEvents, city, language, userPhone, budget);
+  }
+
+  // Check if user is asking for "more" events from a previous query
+  if (userPhone) {
+    const remaining = getRemainingCount(userPhone);
+    if (remaining > 0 && isAskingForMore(userMessage)) {
+      const nextBatch = getNextEvents(userPhone, 8);
+      if (nextBatch.length > 0) {
+        return sendStructuredEventCards(nextBatch, city, language, userPhone, budget, true);
+      }
+    }
   }
 
   // No events: use LLM with knowledge base
@@ -387,7 +412,8 @@ async function sendStructuredEventCards(
   city: string,
   language: "es" | "en",
   userPhone?: string,
-  budget?: "free" | "low" | "high" | null
+  budget?: "free" | "low" | "high" | null,
+  isNextBatch: boolean = false
 ): Promise<string> {
   const logger = getLogger();
   const isEn = language === "en";
@@ -457,9 +483,16 @@ async function sendStructuredEventCards(
       }
     }
 
+    // Track shown events for pagination
+    if (userPhone && !isNextBatch) {
+      markEventsShown(userPhone, eventsToShow.length);
+    } else if (userPhone && isNextBatch) {
+      // getNextEvents already updated the counter
+    }
+
     // Send summary message at the end
     const summaryCount = eventsToShow.length;
-    const remaining = events.length - maxEvents;
+    const remaining = userPhone ? getRemainingCount(userPhone) : Math.max(0, events.length - maxEvents);
 
     let budgetHint = "";
     if (budget === "free") {
