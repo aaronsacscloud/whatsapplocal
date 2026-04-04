@@ -2,6 +2,7 @@ import { getLLMClient } from "../llm/client.js";
 import { sendTextMessage } from "../whatsapp/sender.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
+import { getWeatherContext } from "../knowledge/weather.js";
 
 const LOCAL_INFO_SYSTEM = `Eres un experto local de San Miguel de Allende, Mexico. Conoces la ciudad como la palma de tu mano.
 Responde siempre en español informal pero respetuoso. Se conciso y directo.
@@ -19,7 +20,26 @@ export async function handleLocalInfo(
   const client = getLLMClient();
   const knowledge = getLocalKnowledge();
 
+  // Fetch weather if the question might be about climate/weather/what to wear
+  let weatherContext = "";
+  const lowerBody = body.toLowerCase();
+  if (
+    lowerBody.includes("clima") ||
+    lowerBody.includes("lluv") ||
+    lowerBody.includes("frio") ||
+    lowerBody.includes("calor") ||
+    lowerBody.includes("temperatura") ||
+    lowerBody.includes("que llevo") ||
+    lowerBody.includes("ropa") ||
+    lowerBody.includes("weather")
+  ) {
+    weatherContext = await getWeatherContext();
+  }
+
   try {
+    const contextParts = [knowledge];
+    if (weatherContext) contextParts.push(weatherContext);
+
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 600,
@@ -27,7 +47,7 @@ export async function handleLocalInfo(
       messages: [
         {
           role: "user",
-          content: `CONTEXTO LOCAL (usa esto para responder con precisión):\n${knowledge}\n\n---\nPREGUNTA DEL USUARIO: "${body}"`,
+          content: `CONTEXTO LOCAL (usa esto para responder con precisión):\n${contextParts.join("\n\n")}\n\n---\nPREGUNTA DEL USUARIO: "${body}"`,
         },
       ],
     });
