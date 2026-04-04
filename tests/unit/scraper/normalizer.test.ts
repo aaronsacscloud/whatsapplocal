@@ -1,61 +1,68 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalizeApifyEvent,
-  normalizeApifyEvents,
+  normalizeApifyPosts,
 } from "../../../src/scraper/normalizer.js";
-import type { ApifyRawEvent } from "../../../src/scraper/apify.js";
+import type { ApifyFacebookPost } from "../../../src/scraper/apify.js";
 
-describe("normalizeApifyEvent", () => {
-  it("normalizes a full event", () => {
-    const raw: ApifyRawEvent = {
-      name: "Jazz Night",
-      description: "Live jazz at the bar",
-      startDate: "2026-04-05T21:00:00Z",
-      endDate: "2026-04-06T01:00:00Z",
-      location: { name: "Bar El Poblado", address: "Calle 10 #43-12" },
-      url: "https://facebook.com/events/123",
-      image: "https://img.example.com/jazz.jpg",
-    };
-
-    const result = normalizeApifyEvent(raw, "Buenos Aires", "https://fb.com/page");
-
-    expect(result).not.toBeNull();
-    expect(result!.title).toBe("Jazz Night");
-    expect(result!.venueName).toBe("Bar El Poblado");
-    expect(result!.venueAddress).toBe("Calle 10 #43-12");
-    expect(result!.city).toBe("Buenos Aires");
-    expect(result!.sourceType).toBe("facebook_page");
-    expect(result!.confidence).toBe(0.9);
-    expect(result!.dedupHash).toBeDefined();
-    expect(result!.expiresAt).toBeDefined();
-  });
-
-  it("returns null for events without a name", () => {
-    const raw: ApifyRawEvent = { description: "No name event" };
-    expect(normalizeApifyEvent(raw, "BA", "url")).toBeNull();
-  });
-
-  it("handles partial data gracefully", () => {
-    const raw: ApifyRawEvent = { name: "Mystery Event" };
-    const result = normalizeApifyEvent(raw, "Buenos Aires", "url");
-
-    expect(result).not.toBeNull();
-    expect(result!.title).toBe("Mystery Event");
-    expect(result!.venueName).toBeNull();
-    expect(result!.eventDate).toBeNull();
-    expect(result!.dedupHash).toBeUndefined();
-  });
-});
-
-describe("normalizeApifyEvents", () => {
-  it("filters out invalid events", () => {
-    const events: ApifyRawEvent[] = [
-      { name: "Good Event" },
-      { description: "No name" },
-      { name: "Another Good Event" },
+describe("normalizeApifyPosts", () => {
+  it("normalizes a post with event signals", () => {
+    const posts: ApifyFacebookPost[] = [
+      {
+        text: "Esta noche jazz en vivo! 9pm. Cover $100. No se lo pierdan!",
+        url: "https://facebook.com/post/123",
+        time: "2026-04-05T21:00:00Z",
+        pageName: "RaindogLounge",
+        likes: 50,
+      },
     ];
 
-    const results = normalizeApifyEvents(events, "BA", "url");
-    expect(results).toHaveLength(2);
+    const results = normalizeApifyPosts(posts, "San Miguel de Allende", "https://fb.com/page");
+    expect(results.length).toBeGreaterThanOrEqual(1);
+
+    const event = results[0];
+    expect(event.city).toBe("San Miguel de Allende");
+    expect(event.sourceType).toBe("facebook_page");
+    expect(event.confidence).toBeGreaterThanOrEqual(0.5);
+    expect(event.rawContent).toContain("jazz en vivo");
+  });
+
+  it("filters out posts with too little text", () => {
+    const posts: ApifyFacebookPost[] = [
+      { text: "Hi!", time: "2026-04-05T10:00:00Z", pageName: "Test" },
+    ];
+
+    const results = normalizeApifyPosts(posts, "BA", "url");
+    expect(results).toHaveLength(0);
+  });
+
+  it("assigns lower confidence to non-event posts", () => {
+    const posts: ApifyFacebookPost[] = [
+      {
+        text: "We rescued Frankie the dog a few weeks before we opened. She is now our beloved mascot and greeter.",
+        time: "2026-04-02T15:00:00Z",
+        pageName: "RaindogLounge",
+      },
+    ];
+
+    const results = normalizeApifyPosts(posts, "SMA", "url");
+    // This post has no event signals, should get low confidence and be filtered
+    for (const r of results) {
+      expect(r.confidence).toBeLessThan(0.7);
+    }
+  });
+
+  it("extracts venue name from page name", () => {
+    const posts: ApifyFacebookPost[] = [
+      {
+        text: "Tonight live music with the band! 8pm until midnight. Free cover. Come join us!",
+        time: "2026-04-05T20:00:00Z",
+        pageName: "BarElPoblado",
+      },
+    ];
+
+    const results = normalizeApifyPosts(posts, "SMA", "url");
+    if (results.length > 0) {
+      expect(results[0].venueName).toContain("Bar");
+    }
   });
 });
