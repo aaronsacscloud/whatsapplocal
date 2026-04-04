@@ -28,15 +28,15 @@ export async function searchFromClassification(
     filters.dateFrom = dateFrom;
     filters.dateTo = dateTo;
   } else {
-    // Default: events from start of today (SMA timezone) until end of next week
+    // No date specified: default to TODAY only (strict)
+    // This prevents showing events from other days when user asks "que hay?"
     const SMA_TZ = -6;
     const now = new Date();
     const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
     const sma = new Date(smaMs);
     const todaySMA = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ * 3600000);
     filters.dateFrom = todaySMA;
-    const nextWeek = new Date(todaySMA.getTime() + 7 * 24 * 60 * 60 * 1000);
-    filters.dateTo = nextWeek;
+    filters.dateTo = new Date(todaySMA.getTime() + 24 * 60 * 60 * 1000);
   }
 
   let results = await searchEvents(filters);

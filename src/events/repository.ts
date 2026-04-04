@@ -92,12 +92,12 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
 
     // 1. Regular events where event_date falls in range
     typeClauses.push(
-      `(content_type = 'event' AND event_date >= '${dateFromISO}'::timestamptz AND event_date <= '${dateToISO}'::timestamptz)`
+      `(content_type = 'event' AND event_date >= '${dateFromISO}'::timestamptz AND event_date < '${dateToISO}'::timestamptz)`
     );
 
     // Also include events with NULL content_type (legacy data)
     typeClauses.push(
-      `(content_type IS NULL AND event_date >= '${dateFromISO}'::timestamptz AND event_date <= '${dateToISO}'::timestamptz)`
+      `(content_type IS NULL AND event_date >= '${dateFromISO}'::timestamptz AND event_date < '${dateToISO}'::timestamptz)`
     );
 
     // 2. Recurring events where recurrence_day matches any day in the range

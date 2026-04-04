@@ -83,7 +83,7 @@ describe("searchFromClassification", () => {
     );
   });
 
-  it("defaults to next 7 days when no date", async () => {
+  it("defaults to today only when no date specified", async () => {
     await searchFromClassification({
       intent: "event_query",
       city: "Buenos Aires",
@@ -96,6 +96,6 @@ describe("searchFromClassification", () => {
     const call = mockSearchEvents.mock.calls[0][0];
     const diffDays =
       (call.dateTo.getTime() - call.dateFrom.getTime()) / (1000 * 60 * 60 * 24);
-    expect(diffDays).toBeCloseTo(7, 0);
+    expect(diffDays).toBeCloseTo(1, 0); // Today only, not 7 days
   });
 });

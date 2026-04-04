@@ -65,13 +65,32 @@ function formatEventCard(e: any, language: "es" | "en"): string {
     }
   }
 
+  // Recurring event: show day + time
+  const contentType = e.contentType || e.content_type;
+  const recurrenceDay = e.recurrenceDay ?? e.recurrence_day;
+  const recurrenceTime = e.recurrenceTime || e.recurrence_time;
+  if (contentType === "recurring" && recurrenceDay !== null && recurrenceDay !== undefined) {
+    const days = isEn
+      ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+      : ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+    const dayName = days[recurrenceDay] || "";
+    const label = isEn ? "Every" : "Cada";
+    lines.push(`🔄 ${label} ${dayName}${recurrenceTime ? ` — ${recurrenceTime}` : ""}`);
+  }
+
+  // Price
+  const price = e.price;
+  if (price) {
+    lines.push(`🎟️ ${price}`);
+  }
+
   // Description (brief)
   if (e.description) {
     const desc = e.description.substring(0, 150);
     lines.push(desc + (e.description.length > 150 ? "..." : ""));
   }
 
-  // Source URL (always show if available)
+  // Source URL
   const sourceUrl = e.sourceUrl || e.source_url;
   if (sourceUrl) {
     lines.push(`🔗 ${sourceUrl}`);
@@ -289,8 +308,8 @@ async function generateLLMFallback(
   messages.push({
     role: "user",
     content: isEnglish
-      ? `City: ${city}\nNo events found.\nUser: "${userMessage}"\nSuggest specific alternatives.`
-      : `Ciudad: ${city}\nNo hay eventos.\nUsuario: "${userMessage}"\nSugiere alternativas específicas.`,
+      ? `City: ${city}\nNo events found for this specific date.\nUser: "${userMessage}"\n\nIMPORTANT: Tell the user you don't have events for that date but ask them which date they're interested in (today, tomorrow, this weekend, this week). Also suggest trying a different category. Be brief.`
+      : `Ciudad: ${city}\nNo hay eventos para esta fecha específica.\nUsuario: "${userMessage}"\n\nIMPORTANTE: Dile al usuario que no tienes eventos para esa fecha pero pregúntale qué fecha le interesa (hoy, mañana, este fin de semana, esta semana). También sugiere probar otra categoría. Se breve.`,
   });
 
   try {
