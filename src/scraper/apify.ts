@@ -11,31 +11,46 @@ function getApifyClient(): ApifyClient {
   return _client;
 }
 
-export interface ApifyRawEvent {
-  name?: string;
-  description?: string;
-  startDate?: string;
-  endDate?: string;
-  location?: {
-    name?: string;
-    address?: string;
-  };
+export interface ApifyFacebookPost {
+  text?: string;
   url?: string;
-  image?: string;
+  facebookUrl?: string;
+  time?: string;
+  timestamp?: number;
+  pageName?: string;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  media?: Array<{
+    thumbnail?: string;
+    photo_image?: { uri?: string };
+    [key: string]: unknown;
+  }>;
   [key: string]: unknown;
 }
 
+/**
+ * Scrape recent posts from a Facebook page via Apify.
+ * Uses the apify/facebook-posts-scraper actor.
+ */
 export async function scrapeSource(
   sourceUrl: string
-): Promise<ApifyRawEvent[]> {
+): Promise<ApifyFacebookPost[]> {
   const logger = getLogger();
   const client = getApifyClient();
 
   try {
-    const run = await client.actor("apify/facebook-events-scraper").call({
-      startUrls: [{ url: sourceUrl }],
-      maxItems: 50,
-    });
+    logger.info({ source: sourceUrl }, "Starting Apify Facebook scrape");
+
+    const run = await client
+      .actor("apify/facebook-posts-scraper")
+      .call(
+        {
+          startUrls: [{ url: sourceUrl }],
+          resultsLimit: 20,
+        },
+        { waitSecs: 120 }
+      );
 
     const { items } = await client
       .dataset(run.defaultDatasetId)
@@ -46,7 +61,7 @@ export async function scrapeSource(
       "Apify scrape completed"
     );
 
-    return items as ApifyRawEvent[];
+    return items as ApifyFacebookPost[];
   } catch (error) {
     logger.error({ error, source: sourceUrl }, "Apify scrape failed");
     throw error;

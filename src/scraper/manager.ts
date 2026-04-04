@@ -1,5 +1,5 @@
 import { scrapeSource } from "./apify.js";
-import { normalizeApifyEvents } from "./normalizer.js";
+import { normalizeApifyPosts } from "./normalizer.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
 import {
@@ -117,9 +117,9 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
 
   for (const source of fbSources) {
     try {
-      const rawEvents = await scrapeSource(source.url);
-      const normalized = normalizeApifyEvents(
-        rawEvents,
+      const rawPosts = await scrapeSource(source.url);
+      const normalized = normalizeApifyPosts(
+        rawPosts,
         config.DEFAULT_CITY,
         source.url
       );
