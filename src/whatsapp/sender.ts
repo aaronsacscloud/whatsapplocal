@@ -2,6 +2,56 @@ import { getWhatsAppClient, getPhoneNumberId } from "./client.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
 
+/**
+ * Send an image with optional caption via Kapso MCP
+ */
+export async function sendImageMessage(
+  to: string,
+  imageUrl: string,
+  caption?: string
+): Promise<void> {
+  const logger = getLogger();
+  const config = getConfig();
+
+  if (!config.KAPSO_API_KEY) {
+    logger.warn("Cannot send image: no Kapso API key");
+    return;
+  }
+
+  try {
+    const response = await fetch("https://app.kapso.ai/mcp", {
+      method: "POST",
+      headers: {
+        "X-API-Key": config.KAPSO_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+          name: "whatsapp_send_media",
+          arguments: {
+            conversation_selector: { phone_number: to },
+            media_type: "image",
+            media_url: imageUrl,
+            caption: caption || "",
+          },
+        },
+        id: Date.now(),
+      }),
+    });
+
+    const result = (await response.json()) as any;
+    if (result.error) {
+      logger.warn({ error: result.error }, "Kapso image send failed, skipping image");
+    } else {
+      logger.info({ to: to.slice(-4) }, "Image sent");
+    }
+  } catch (error) {
+    logger.warn({ error }, "Image send failed, skipping");
+  }
+}
+
 export async function sendTextMessage(
   to: string,
   text: string

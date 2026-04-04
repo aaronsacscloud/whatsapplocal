@@ -17,7 +17,7 @@ export async function handleVenueQuery(
   const city = classification.city ?? config.DEFAULT_CITY;
 
   const events = await searchFromClassification(classification);
-  const response = await generateResponse(body, events, city, conversationHistory, language);
+  const response = await generateResponse(body, events, city, conversationHistory, language, from);
 
   await sendTextMessage(from, response);
   await incrementQueryCount(hashPhone(from));
