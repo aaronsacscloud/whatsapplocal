@@ -26,12 +26,14 @@ export async function searchFromClassification(
     filters.dateFrom = dateFrom;
     filters.dateTo = dateTo;
   } else {
-    // Default: events from start of today (UTC) until end of next week
+    // Default: events from start of today (SMA timezone) until end of next week
+    const SMA_TZ = -6;
     const now = new Date();
-    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    filters.dateFrom = todayUtc;
-    const nextWeek = new Date(todayUtc);
-    nextWeek.setUTCDate(nextWeek.getUTCDate() + 7);
+    const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
+    const sma = new Date(smaMs);
+    const todaySMA = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ * 3600000);
+    filters.dateFrom = todaySMA;
+    const nextWeek = new Date(todaySMA.getTime() + 7 * 24 * 60 * 60 * 1000);
     filters.dateTo = nextWeek;
   }
 
@@ -42,11 +44,14 @@ function parseDateRange(dateStr: string): {
   dateFrom: Date;
   dateTo: Date;
 } {
+  // Use SMA timezone (UTC-6) to determine "today"
+  const SMA_TZ_OFFSET = -6;
   const now = new Date();
-  // Use UTC to match DB timestamps
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ_OFFSET * 3600000;
+  const sma = new Date(smaMs);
+  // "today" in SMA = start of day in UTC (SMA midnight = UTC 06:00)
+  const today = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ_OFFSET * 3600000);
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
   const lower = dateStr.toLowerCase().trim();
 

@@ -11,59 +11,75 @@ export interface ConversationMessage {
   content: string;
 }
 
-/**
- * Format a single event into a rich text block for WhatsApp
- */
+// SMA timezone offset: UTC-6 (CST)
+const SMA_TZ_OFFSET = -6;
+
+function getSMANow(): Date {
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utcMs + SMA_TZ_OFFSET * 3600000);
+}
+
+function getSMAToday(): Date {
+  const sma = getSMANow();
+  return new Date(sma.getFullYear(), sma.getMonth(), sma.getDate());
+}
+
 function formatEventCard(e: any, language: "es" | "en"): string {
   const isEn = language === "en";
   const lines: string[] = [];
 
-  // Title with emoji based on category
   const emoji = getCategoryEmoji(e.category);
   lines.push(`${emoji} *${e.title}*`);
 
   // Venue + address
-  if (e.venueName || e.venue_name) {
-    const venue = e.venueName || e.venue_name;
-    const addr = e.venueAddress || e.venue_address;
-    lines.push(`📍 ${venue}${addr ? ` — ${addr}` : ""}`);
+  const venue = e.venueName || e.venue_name;
+  const addr = e.venueAddress || e.venue_address;
+  if (venue) {
+    lines.push(`📍 ${venue}${addr ? ` — ${addr}` : ", San Miguel de Allende"}`);
   }
 
-  // Date and time
+  // Date and time in SMA timezone
   const eventDate = e.eventDate || e.event_date;
   if (eventDate) {
     const d = new Date(eventDate);
-    const dateStr = d.toLocaleDateString(isEn ? "en-US" : "es-MX", {
+    // Adjust to SMA timezone for display
+    const smaDate = new Date(d.getTime() + SMA_TZ_OFFSET * 3600000);
+    const dateStr = smaDate.toLocaleDateString(isEn ? "en-US" : "es-MX", {
       weekday: "long",
       day: "numeric",
       month: "long",
+      timeZone: "UTC", // We already adjusted
     });
-    const timeStr = d.toLocaleTimeString(isEn ? "en-US" : "es-MX", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    });
-    // Only show time if it's not midnight (which means time wasn't specified)
     const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
-    lines.push(`📅 ${dateStr}${hasTime ? ` — ${timeStr}` : ""}`);
+    if (hasTime) {
+      const timeStr = smaDate.toLocaleTimeString(isEn ? "en-US" : "es-MX", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "UTC",
+      });
+      lines.push(`📅 ${dateStr} — ${timeStr}`);
+    } else {
+      lines.push(`📅 ${dateStr}`);
+    }
   }
 
-  // Description (truncated)
+  // Description
   if (e.description) {
-    const desc = e.description.substring(0, 120);
-    lines.push(desc + (e.description.length > 120 ? "..." : ""));
+    const desc = e.description.substring(0, 150);
+    lines.push(desc + (e.description.length > 150 ? "..." : ""));
   }
 
-  // Source URL
+  // Source URL (always show if available)
   const sourceUrl = e.sourceUrl || e.source_url;
-  if (sourceUrl && !sourceUrl.includes("sanmiguellive") && !sourceUrl.includes("bandsintown")) {
+  if (sourceUrl) {
     lines.push(`🔗 ${sourceUrl}`);
   }
 
-  // Google Maps link
-  const venueName = e.venueName || e.venue_name;
-  if (venueName) {
-    const mapsUrl = getGoogleMapsUrl(venueName, e.venueAddress || e.venue_address);
+  // Google Maps
+  if (venue) {
+    const mapsUrl = getGoogleMapsUrl(venue, addr);
     lines.push(`📌 ${mapsUrl}`);
   }
 
@@ -72,25 +88,26 @@ function formatEventCard(e: any, language: "es" | "en"): string {
 
 function getCategoryEmoji(category: string | null): string {
   const emojis: Record<string, string> = {
-    music: "🎵",
-    food: "🍽️",
-    nightlife: "🌙",
-    culture: "🎨",
-    sports: "⚽",
-    popup: "🎪",
-    wellness: "🧘",
-    tour: "🚶",
-    class: "📚",
-    adventure: "🎈",
-    wine: "🍷",
+    music: "🎵", food: "🍽️", nightlife: "🌙", culture: "🎨",
+    sports: "⚽", popup: "🎪", wellness: "🧘", tour: "🚶",
+    class: "📚", adventure: "🎈", wine: "🍷",
   };
   return emojis[category || ""] || "📌";
 }
 
 /**
- * Generate a rich response with event cards and optional images.
- * Returns the text response and sends images separately.
+ * Deduplicate events by title similarity
  */
+function deduplicateByTitle(events: Event[]): Event[] {
+  const seen = new Set<string>();
+  return events.filter((e) => {
+    const key = ((e as any).title || "").toLowerCase().trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export async function generateResponse(
   userMessage: string,
   events: Event[],
@@ -100,37 +117,30 @@ export async function generateResponse(
   userPhone?: string
 ): Promise<string> {
   const logger = getLogger();
-  const client = getLLMClient();
-  const knowledge = getLocalKnowledge();
   const isEnglish = language === "en";
 
-  // If we have events, build rich cards instead of relying on LLM formatting
-  if (events.length > 0) {
-    return formatRichResponse(events, userMessage, city, language, userPhone, conversationHistory);
+  // Deduplicate events by title
+  const uniqueEvents = deduplicateByTitle(events);
+
+  if (uniqueEvents.length > 0) {
+    return formatRichResponse(uniqueEvents, userMessage, city, language, userPhone);
   }
 
-  // No events: use LLM to generate a helpful response
+  // No events: use LLM
+  const client = getLLMClient();
+  const knowledge = getLocalKnowledge();
   const baseSystem = isEnglish ? RESPONDER_SYSTEM_EN : RESPONDER_SYSTEM;
-  const knowledgeLabel = isEnglish
-    ? "LOCAL KNOWLEDGE (respond in English):"
-    : "CONOCIMIENTO LOCAL:";
-
-  const systemWithKnowledge = `${baseSystem}\n\n${knowledgeLabel}\n${knowledge.substring(0, 3000)}`;
+  const systemWithKnowledge = `${baseSystem}\n\nCONOCIMIENTO LOCAL:\n${knowledge.substring(0, 3000)}`;
 
   const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (const msg of conversationHistory) {
     messages.push({ role: msg.role, content: msg.content });
   }
-
-  const noEventsText = isEnglish
-    ? "No events found for this search."
-    : "No se encontraron eventos para esta busqueda.";
-
   messages.push({
     role: "user",
     content: isEnglish
-      ? `City: ${city}\n\n${noEventsText}\n\nUser: "${userMessage}"\n\nSuggest real, specific alternatives from your local knowledge.`
-      : `Ciudad: ${city}\n\n${noEventsText}\n\nUsuario: "${userMessage}"\n\nSugiere alternativas reales y específicas usando tu conocimiento local.`,
+      ? `City: ${city}\nNo events found.\nUser: "${userMessage}"\nSuggest specific alternatives.`
+      : `Ciudad: ${city}\nNo hay eventos.\nUsuario: "${userMessage}"\nSugiere alternativas específicas.`,
   });
 
   try {
@@ -140,75 +150,59 @@ export async function generateResponse(
       system: systemWithKnowledge,
       messages,
     });
-
     return response.content[0].type === "text"
       ? response.content[0].text
-      : isEnglish
-        ? "Sorry, I couldn't generate a response."
-        : "Lo siento, no pude generar una respuesta.";
+      : "Lo siento, intenta de nuevo.";
   } catch (error) {
     logger.error({ error }, "Response generation failed");
-    return isEnglish
-      ? "We're experiencing issues. Please try again."
-      : "Estamos experimentando problemas. Intenta de nuevo.";
+    return "Estamos experimentando problemas. Intenta de nuevo.";
   }
 }
 
-/**
- * Build a rich formatted response with event cards, images, and maps
- */
 async function formatRichResponse(
   events: Event[],
   userMessage: string,
   city: string,
   language: "es" | "en",
-  userPhone?: string,
-  conversationHistory: ConversationMessage[] = []
+  userPhone?: string
 ): Promise<string> {
   const logger = getLogger();
   const isEn = language === "en";
   const maxEvents = 4;
   const shownEvents = events.slice(0, maxEvents);
 
-  // Determine what date we're showing
+  // Date label using SMA timezone
   const dateLabel = getDateLabel(shownEvents, language);
 
-  // Header
   const header = isEn
     ? `Here's what's happening ${dateLabel} in ${city}:`
     : `Esto es lo que hay ${dateLabel} en ${city}:`;
 
-  // Event cards
-  const cards = shownEvents.map((e) => formatEventCard(e, language)).join("\n\n");
+  const cards = shownEvents.map((e) => formatEventCard(e, language)).join("\n\n---\n\n");
 
-  // Footer
   const moreCount = events.length - maxEvents;
   let footer = "";
   if (moreCount > 0) {
     footer = isEn
-      ? `\n\n_+${moreCount} more events. Ask me for a specific category or date!_`
-      : `\n\n_+${moreCount} eventos más. Pregúntame por una categoría o fecha específica!_`;
+      ? `\n\n_+${moreCount} more events. Ask for a specific category!_`
+      : `\n\n_+${moreCount} eventos más. Pregunta por una categoría específica!_`;
   }
 
   const suggestion = isEn
-    ? "\n\nWant more details on any of these? Or ask me about a specific type of event 🎶"
-    : "\n\n¿Quieres más detalles de alguno? También puedes preguntarme por un tipo específico de evento 🎶";
+    ? "\n\nWant more details? Ask about a specific type 🎶"
+    : "\n\n¿Quieres más detalles de alguno? 🎶";
 
   const fullText = `${header}\n\n${cards}${footer}${suggestion}`;
 
-  // Send images for events that have them (async, don't block)
+  // Send poster images (up to 2)
   if (userPhone) {
     for (const e of shownEvents.slice(0, 2)) {
       const imgUrl = (e as any).imageUrl || (e as any).image_url;
       if (imgUrl && imgUrl.startsWith("http")) {
         try {
-          await sendImageMessage(
-            userPhone,
-            imgUrl,
-            `${(e as any).title}`
-          );
+          await sendImageMessage(userPhone, imgUrl, `${(e as any).title}`);
         } catch {
-          // Don't fail if image send fails
+          logger.debug("Image send skipped");
         }
       }
     }
@@ -217,15 +211,11 @@ async function formatRichResponse(
   return fullText;
 }
 
-/**
- * Figure out what date range we're showing and return a label
- */
 function getDateLabel(events: Event[], language: "es" | "en"): string {
   const isEn = language === "en";
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const smaToday = getSMAToday();
+  const smaTomorrow = new Date(smaToday);
+  smaTomorrow.setDate(smaTomorrow.getDate() + 1);
 
   const dates = events
     .map((e) => {
@@ -234,21 +224,22 @@ function getDateLabel(events: Event[], language: "es" | "en"): string {
     })
     .filter((d): d is Date => d !== null);
 
-  if (dates.length === 0) return isEn ? "" : "";
+  if (dates.length === 0) return "";
 
   const earliest = new Date(Math.min(...dates.map((d) => d.getTime())));
+  // Convert to SMA date for comparison
+  const earliestSMA = new Date(earliest.getTime() + SMA_TZ_OFFSET * 3600000);
+  const earliestDay = new Date(earliestSMA.getFullYear(), earliestSMA.getMonth(), earliestSMA.getDate());
 
-  if (earliest >= today && earliest < tomorrow) {
-    return isEn ? "tonight" : "esta noche";
+  if (earliestDay.getTime() === smaToday.getTime()) {
+    return isEn ? "today" : "hoy";
   }
 
-  const dayAfterTomorrow = new Date(tomorrow);
-  dayAfterTomorrow.setUTCDate(dayAfterTomorrow.getUTCDate() + 1);
-  if (earliest >= tomorrow && earliest < dayAfterTomorrow) {
+  if (earliestDay.getTime() === smaTomorrow.getTime()) {
     return isEn ? "tomorrow" : "mañana";
   }
 
-  const dayName = earliest.toLocaleDateString(isEn ? "en-US" : "es-MX", {
+  const dayName = earliestSMA.toLocaleDateString(isEn ? "en-US" : "es-MX", {
     weekday: "long",
     day: "numeric",
     month: "long",
