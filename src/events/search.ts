@@ -17,7 +17,7 @@ export async function searchFromClassification(
     query: classification.query && !isGenericQuery(classification.query)
       ? classification.query
       : undefined,
-    limit: 10,
+    limit: 30, // Enough for multi-day queries, responder handles pagination
   };
 
   // Parse date expressions
@@ -55,9 +55,20 @@ function parseDateRange(dateStr: string): {
 
   const lower = dateStr.toLowerCase().trim();
 
+  // "hoy y mañana" / "today and tomorrow" = 2-day range
+  if (
+    (lower.includes("hoy") && lower.includes("mana")) ||
+    (lower.includes("today") && lower.includes("tomorrow"))
+  ) {
+    return {
+      dateFrom: today,
+      dateTo: new Date(today.getTime() + 2 * 24 * 60 * 60 * 1000),
+    };
+  }
+
   if (lower === "hoy" || lower === "today" || lower.includes("esta noche")) {
     return {
-      dateFrom: today, // Start of day, not current time
+      dateFrom: today,
       dateTo: new Date(today.getTime() + 24 * 60 * 60 * 1000),
     };
   }

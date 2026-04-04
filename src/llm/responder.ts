@@ -168,47 +168,137 @@ async function formatRichResponse(
 ): Promise<string> {
   const logger = getLogger();
   const isEn = language === "en";
-  const maxEvents = 4;
-  const shownEvents = events.slice(0, maxEvents);
+  const eventsPerMessage = 4;
 
-  // Date label using SMA timezone
-  const dateLabel = getDateLabel(shownEvents, language);
+  // Group events by day for multi-day queries
+  const dayGroups = groupEventsByDay(events, language);
 
-  const header = isEn
-    ? `Here's what's happening ${dateLabel} in ${city}:`
-    : `Esto es lo que hay ${dateLabel} en ${city}:`;
+  // Build all messages
+  const allMessages: string[] = [];
 
-  const cards = shownEvents.map((e) => formatEventCard(e, language)).join("\n\n---\n\n");
+  for (const group of dayGroups) {
+    const header = isEn
+      ? `📋 *${group.label}* in ${city}:`
+      : `📋 *${group.label}* en ${city}:`;
 
-  const moreCount = events.length - maxEvents;
-  let footer = "";
-  if (moreCount > 0) {
-    footer = isEn
-      ? `\n\n_+${moreCount} more events. Ask for a specific category!_`
-      : `\n\n_+${moreCount} eventos más. Pregunta por una categoría específica!_`;
+    // Split into chunks of eventsPerMessage
+    for (let i = 0; i < group.events.length; i += eventsPerMessage) {
+      const chunk = group.events.slice(i, i + eventsPerMessage);
+      const cards = chunk.map((e) => formatEventCard(e, language)).join("\n\n---\n\n");
+
+      const isFirst = i === 0;
+      const msgParts: string[] = [];
+
+      if (isFirst) {
+        msgParts.push(header);
+      }
+
+      msgParts.push(cards);
+
+      // Show remaining count on last chunk
+      const remaining = group.events.length - (i + eventsPerMessage);
+      if (remaining > 0) {
+        // More chunks coming for this day
+      }
+
+      allMessages.push(msgParts.join("\n\n"));
+    }
   }
 
+  // Add final suggestion to the last message
   const suggestion = isEn
-    ? "\n\nWant more details? Ask about a specific type 🎶"
+    ? "\n\n¿Want more details on any? 🎶"
     : "\n\n¿Quieres más detalles de alguno? 🎶";
 
-  const fullText = `${header}\n\n${cards}${footer}${suggestion}`;
+  if (allMessages.length > 0) {
+    allMessages[allMessages.length - 1] += suggestion;
+  }
 
-  // Send poster images (up to 2)
+  // Send poster images for first few events
   if (userPhone) {
-    for (const e of shownEvents.slice(0, 2)) {
-      const imgUrl = (e as any).imageUrl || (e as any).image_url;
-      if (imgUrl && imgUrl.startsWith("http")) {
-        try {
-          await sendImageMessage(userPhone, imgUrl, `${(e as any).title}`);
-        } catch {
-          logger.debug("Image send skipped");
+    let imagesSent = 0;
+    for (const group of dayGroups) {
+      for (const e of group.events) {
+        if (imagesSent >= 3) break;
+        const imgUrl = (e as any).imageUrl || (e as any).image_url;
+        if (imgUrl && imgUrl.startsWith("http")) {
+          try {
+            await sendImageMessage(userPhone, imgUrl, `${(e as any).title}`);
+            imagesSent++;
+          } catch {
+            // Skip failed images
+          }
         }
       }
     }
   }
 
-  return fullText;
+  // Send additional messages if there are multiple
+  if (userPhone && allMessages.length > 1) {
+    const { sendTextMessage } = await import("../whatsapp/sender.js");
+    // Return first message, send the rest as separate messages
+    for (let i = 1; i < allMessages.length; i++) {
+      try {
+        await sendTextMessage(userPhone, allMessages[i]);
+      } catch {
+        logger.warn("Failed to send additional event message");
+      }
+    }
+  }
+
+  return allMessages[0] || (isEn ? "No events found." : "No hay eventos.");
+}
+
+interface DayGroup {
+  label: string;
+  events: Event[];
+}
+
+function groupEventsByDay(events: Event[], language: "es" | "en"): DayGroup[] {
+  const isEn = language === "en";
+  const smaToday = getSMAToday();
+  const smaTomorrow = new Date(smaToday);
+  smaTomorrow.setDate(smaTomorrow.getDate() + 1);
+
+  const groups = new Map<string, { label: string; events: Event[] }>();
+
+  for (const e of events) {
+    const eventDate = (e as any).eventDate || (e as any).event_date;
+    let dayKey: string;
+    let dayLabel: string;
+
+    if (!eventDate) {
+      dayKey = "ongoing";
+      dayLabel = isEn ? "Ongoing" : "Sin fecha específica";
+    } else {
+      const d = new Date(eventDate);
+      const smaDt = new Date(d.getTime() + SMA_TZ_OFFSET * 3600000);
+      const smaDay = new Date(smaDt.getFullYear(), smaDt.getMonth(), smaDt.getDate());
+
+      dayKey = smaDay.toISOString().split("T")[0];
+
+      if (smaDay.getTime() === smaToday.getTime()) {
+        dayLabel = isEn ? "Today" : "Hoy";
+      } else if (smaDay.getTime() === smaTomorrow.getTime()) {
+        dayLabel = isEn ? "Tomorrow" : "Mañana";
+      } else {
+        dayLabel = smaDt.toLocaleDateString(isEn ? "en-US" : "es-MX", {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+        });
+        // Capitalize first letter
+        dayLabel = dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1);
+      }
+    }
+
+    if (!groups.has(dayKey)) {
+      groups.set(dayKey, { label: dayLabel, events: [] });
+    }
+    groups.get(dayKey)!.events.push(e);
+  }
+
+  return Array.from(groups.values());
 }
 
 function getDateLabel(events: Event[], language: "es" | "en"): string {

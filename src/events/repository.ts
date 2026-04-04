@@ -84,8 +84,9 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
   const where = conditions.join(" AND ");
   const limit = filters.limit ?? 10;
 
+  // Order by date ASC (earliest first) so events show in chronological order
   const result = await db.execute(
-    sql.raw(`SELECT * FROM events WHERE ${where} ORDER BY event_date DESC NULLS LAST LIMIT ${limit}`)
+    sql.raw(`SELECT * FROM events WHERE ${where} ORDER BY event_date ASC NULLS LAST LIMIT ${limit}`)
   );
 
   return result as unknown as Event[];
