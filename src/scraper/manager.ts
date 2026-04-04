@@ -8,7 +8,7 @@ import {
   recordScrapeSuccess,
   recordScrapeFailure,
 } from "./health.js";
-import { upsertEvent } from "../events/repository.js";
+import { upsertEvent, countEventsForDate, deleteEventsOlderThan } from "../events/repository.js";
 import { analyzeEventImage, enrichEventWithImageData } from "./image-enricher.js";
 import type { NewEvent } from "../db/schema.js";
 import { extractEvent } from "../llm/extractor.js";
@@ -141,6 +141,94 @@ async function runWebScrapers(): Promise<ReturnType<typeof scrapeSanMiguelLive> 
   }
 
   return allEvents;
+}
+
+/**
+ * Smart scrape: run free scrapers always, only scrape Facebook if we need more events.
+ * Also cleans up old events.
+ */
+export async function runSmartScrape(): Promise<ScrapeResult> {
+  const logger = getLogger();
+  const config = getConfig();
+
+  const result: ScrapeResult = {
+    sourcesProcessed: 0,
+    eventsInserted: 0,
+    duplicatesSkipped: 0,
+    errors: 0,
+  };
+
+  // Step 1: Delete events older than yesterday (SMA timezone)
+  const SMA_TZ = -6;
+  const now = new Date();
+  const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
+  const sma = new Date(smaMs);
+  const yesterday = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate() - 1) - SMA_TZ * 3600000);
+
+  try {
+    const deleted = await deleteEventsOlderThan(yesterday);
+    if (deleted > 0) {
+      logger.info({ deleted }, "Cleaned up old events");
+    }
+  } catch (error) {
+    logger.error({ error }, "Failed to clean up old events");
+  }
+
+  // Step 2: Always scrape free sources (web scrapers + platforms)
+  logger.info("Smart scrape: running free scrapers");
+  const webEvents = await runWebScrapers();
+  const { unique: webUnique, duplicates: webDups } = await deduplicateEvents(webEvents);
+
+  for (const event of webUnique) {
+    await upsertEvent(event);
+  }
+
+  result.sourcesProcessed += 2;
+  result.eventsInserted += webUnique.length;
+  result.duplicatesSkipped += webDups;
+
+  // Platform scrapers
+  const platformEvents = await runPlatformScrapers();
+  const { unique: platUnique, duplicates: platDups } = await deduplicateEvents(platformEvents);
+
+  for (const event of platUnique) {
+    await upsertEvent(event);
+  }
+
+  result.sourcesProcessed += 2;
+  result.eventsInserted += platUnique.length;
+  result.duplicatesSkipped += platDups;
+
+  logger.info(
+    { webInserted: webUnique.length, platformInserted: platUnique.length },
+    "Free scraper phase complete"
+  );
+
+  // Step 3: Check if we need Facebook scraping
+  // Count events for today
+  const todayStart = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ * 3600000);
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+  const todayCount = await countEventsForDate(config.DEFAULT_CITY, todayStart, todayEnd);
+
+  logger.info({ todayCount }, "Events for today after free scrape");
+
+  // Only scrape Facebook if fewer than 5 events for today
+  if (todayCount < 5 && config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
+    logger.info("Smart scrape: running Facebook scrapers (need more events)");
+    const apifyResult = await runApifyScrapers();
+    result.sourcesProcessed += apifyResult.sourcesProcessed;
+    result.eventsInserted += apifyResult.eventsInserted;
+    result.duplicatesSkipped += apifyResult.duplicatesSkipped;
+    result.errors += apifyResult.errors;
+  } else {
+    logger.info(
+      { todayCount, hasApify: !!config.APIFY_API_TOKEN },
+      "Smart scrape: skipping Facebook (enough events or no API token)"
+    );
+  }
+
+  logger.info(result, "Smart scrape cycle complete");
+  return result;
 }
 
 /**

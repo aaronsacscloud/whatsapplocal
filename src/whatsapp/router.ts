@@ -49,6 +49,7 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
   const config = getConfig();
   const startTime = Date.now();
   const phoneHash = hashPhone(message.from);
+  let detectedLanguage: "es" | "en" = "es"; // Track language across try/catch
 
   logger.info(
     { from: message.from.slice(-4), isForwarded: message.isForwarded, type: message.type },
@@ -138,6 +139,7 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
     );
 
     const language = classification.language;
+    detectedLanguage = language;
 
     // Update user language preference if detected
     await updatePreferences(phoneHash, { language });
@@ -318,9 +320,8 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
   } catch (error) {
     logger.error({ error, messageId: message.messageId }, "Message routing failed");
     try {
-      // Try to detect language from the message for error response
-      const isLikelyEnglish = /^[a-zA-Z\s.,!?'"]+$/.test(message.body.trim());
-      const errorMessage = isLikelyEnglish ? PROCESSING_MESSAGE_EN : PROCESSING_MESSAGE;
+      // Use the detected language from classification (persists across try/catch)
+      const errorMessage = detectedLanguage === "en" ? PROCESSING_MESSAGE_EN : PROCESSING_MESSAGE;
       await sendTextMessage(message.from, errorMessage);
     } catch {
       logger.error("Failed to send error message to user");

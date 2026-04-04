@@ -47,12 +47,16 @@ export function normalizeApifyPost(
     ? new Date(eventDate.getTime() + 7 * 24 * 60 * 60 * 1000) // 7 days for FB posts
     : null;
 
+  // Classify content_type based on event signals
+  const contentType = classifyContentType(text, isLikelyEvent, eventDate);
+
   return {
     title: extractTitle(post.text),
     venueName,
     city,
     eventDate,
     category: "other", // LLM extractor will enrich this
+    contentType,
     description: post.text.substring(0, 500),
     sourceUrl: post.url || sourceUrl,
     sourceType: "facebook_page",
@@ -117,6 +121,60 @@ function hasEventSignals(text: string): boolean {
   }
 
   return matchCount >= 2;
+}
+
+/**
+ * Classify Facebook post into content_type:
+ * - 'event': has specific date/time signals (tonight, this saturday, date, time)
+ * - 'activity': recurring/permanent (every day, always, open daily, daily specials)
+ * - 'post': generic content about the business (no event signals)
+ */
+function classifyContentType(
+  text: string,
+  isLikelyEvent: boolean,
+  eventDate: Date | null
+): string {
+  // Strong date/time signals → event
+  const specificDateSignals = [
+    /esta noche|tonight/i,
+    /hoy\b|today\b/i,
+    /este (viernes|sabado|sábado|domingo|lunes|martes|miercoles|miércoles|jueves)/i,
+    /this (friday|saturday|sunday|monday|tuesday|wednesday|thursday)/i,
+    /\d{1,2}\s*de\s*(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)/i,
+    /\d{1,2}\/\d{1,2}\/\d{2,4}/i,
+    /\d{4}-\d{2}-\d{2}/i,
+  ];
+
+  const hasSpecificDate = specificDateSignals.some((p) => p.test(text));
+
+  if (hasSpecificDate || (isLikelyEvent && eventDate)) {
+    return "event";
+  }
+
+  // Recurring/permanent activity signals
+  const activitySignals = [
+    /todos los dias|every day|daily/i,
+    /todos los (lunes|martes|miercoles|jueves|viernes|sabados|domingos)/i,
+    /every (monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+    /abierto|open daily|horario|hours/i,
+    /permanente|permanent|siempre|always/i,
+    /menu del dia|daily special|happy hour/i,
+    /de\s+\d{1,2}(:\d{2})?\s*(a|to)\s+\d{1,2}(:\d{2})?\s*(am|pm|hrs)?/i,
+  ];
+
+  const hasActivitySignal = activitySignals.some((p) => p.test(text));
+
+  if (hasActivitySignal && isLikelyEvent) {
+    return "activity";
+  }
+
+  // If it has event signals but no specific date, still an event (low confidence)
+  if (isLikelyEvent) {
+    return "event";
+  }
+
+  // Generic post about the business
+  return "post";
 }
 
 // Keep backward compatibility

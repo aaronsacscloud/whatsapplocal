@@ -3,7 +3,7 @@ import { RESPONDER_SYSTEM, RESPONDER_SYSTEM_EN } from "./prompts.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getGoogleMapsUrl } from "../utils/maps.js";
-import { sendImageMessage } from "../whatsapp/sender.js";
+import { sendImageMessage, sendTextMessage } from "../whatsapp/sender.js";
 import type { Event } from "../db/schema.js";
 
 export interface ConversationMessage {
@@ -65,7 +65,7 @@ function formatEventCard(e: any, language: "es" | "en"): string {
     }
   }
 
-  // Description
+  // Description (brief)
   if (e.description) {
     const desc = e.description.substring(0, 150);
     lines.push(desc + (e.description.length > 150 ? "..." : ""));
@@ -108,6 +108,16 @@ function deduplicateByTitle(events: Event[]): Event[] {
   });
 }
 
+/**
+ * Main response generator.
+ *
+ * NEW FLOW:
+ * 1. When we have events → send structured cards directly (no LLM)
+ * 2. When NO events → use LLM with knowledge base for suggestions
+ *
+ * Returns the first message text. Additional messages (images, subsequent
+ * cards) are sent directly via the sender.
+ */
 export async function generateResponse(
   userMessage: string,
   events: Event[],
@@ -124,10 +134,137 @@ export async function generateResponse(
   const uniqueEvents = deduplicateByTitle(events);
 
   if (uniqueEvents.length > 0) {
-    return formatRichResponse(uniqueEvents, userMessage, city, language, userPhone, budget);
+    return sendStructuredEventCards(uniqueEvents, city, language, userPhone, budget);
   }
 
-  // No events: use LLM
+  // No events: use LLM with knowledge base
+  return generateLLMFallback(userMessage, city, conversationHistory, language, budget);
+}
+
+/**
+ * Send clean, structured event cards — NO LLM formatting.
+ * Each event gets its own image (if available) + text card.
+ * A summary message is sent at the end.
+ */
+async function sendStructuredEventCards(
+  events: Event[],
+  city: string,
+  language: "es" | "en",
+  userPhone?: string,
+  budget?: "free" | "low" | "high" | null
+): Promise<string> {
+  const logger = getLogger();
+  const isEn = language === "en";
+
+  // Sort events by date ASC (earliest first)
+  const sorted = [...events].sort((a, b) => {
+    const dateA = (a as any).eventDate || (a as any).event_date;
+    const dateB = (b as any).eventDate || (b as any).event_date;
+    if (!dateA && !dateB) return 0;
+    if (!dateA) return 1;
+    if (!dateB) return -1;
+    return new Date(dateA).getTime() - new Date(dateB).getTime();
+  });
+
+  // Limit to reasonable number for WhatsApp
+  const maxEvents = 8;
+  const eventsToShow = sorted.slice(0, maxEvents);
+
+  // Build all card messages
+  const cardMessages: Array<{ imageUrl?: string; imageCaption?: string; text: string }> = [];
+
+  for (const event of eventsToShow) {
+    const imgUrl = (event as any).imageUrl || (event as any).image_url;
+    const card = formatEventCard(event, language);
+
+    cardMessages.push({
+      imageUrl: imgUrl && imgUrl.startsWith("http") ? imgUrl : undefined,
+      imageCaption: (event as any).title,
+      text: card,
+    });
+  }
+
+  if (cardMessages.length === 0) {
+    return isEn ? "No events found." : "No hay eventos.";
+  }
+
+  // Send each event as image + card to the user
+  if (userPhone) {
+    for (let i = 0; i < cardMessages.length; i++) {
+      const card = cardMessages[i];
+
+      // Send image first (if available) with caption = title
+      if (card.imageUrl) {
+        try {
+          await sendImageMessage(userPhone, card.imageUrl, card.imageCaption || "");
+        } catch {
+          // Skip failed images silently
+        }
+      }
+
+      // Send the text card
+      try {
+        // First card is returned as the response; additional cards are sent directly
+        if (i > 0) {
+          await sendTextMessage(userPhone, card.text);
+        }
+      } catch {
+        logger.warn("Failed to send event card message");
+      }
+    }
+
+    // Send summary message at the end
+    const summaryCount = eventsToShow.length;
+    const remaining = events.length - maxEvents;
+
+    let budgetHint = "";
+    if (budget === "free") {
+      budgetHint = isEn ? " (free options)" : " (opciones gratis)";
+    } else if (budget === "low") {
+      budgetHint = isEn ? " (budget-friendly)" : " (opciones economicas)";
+    } else if (budget === "high") {
+      budgetHint = isEn ? " (premium)" : " (premium)";
+    }
+
+    let summary: string;
+    if (isEn) {
+      summary = `Those are ${summaryCount} event${summaryCount !== 1 ? "s" : ""}${budgetHint}.`;
+      if (remaining > 0) {
+        summary += ` There are ${remaining} more — ask me to see them!`;
+      }
+      summary += ` Want more details on any?`;
+    } else {
+      summary = `Esos son ${summaryCount} evento${summaryCount !== 1 ? "s" : ""}${budgetHint}.`;
+      if (remaining > 0) {
+        summary += ` Hay ${remaining} mas — pideme verlos!`;
+      }
+      summary += ` Quieres mas detalles de alguno?`;
+    }
+
+    try {
+      await sendTextMessage(userPhone, summary);
+    } catch {
+      logger.warn("Failed to send summary message");
+    }
+  }
+
+  // Return the first card as the "response" (for conversation history)
+  return cardMessages[0].text;
+}
+
+/**
+ * LLM-based fallback when no events are found.
+ * Uses knowledge base + conversation history to suggest alternatives.
+ */
+async function generateLLMFallback(
+  userMessage: string,
+  city: string,
+  conversationHistory: ConversationMessage[],
+  language: "es" | "en",
+  budget?: "free" | "low" | "high" | null
+): Promise<string> {
+  const logger = getLogger();
+  const isEnglish = language === "en";
   const client = getLLMClient();
   const knowledge = getLocalKnowledge();
   const baseSystem = isEnglish ? RESPONDER_SYSTEM_EN : RESPONDER_SYSTEM;
@@ -168,161 +305,10 @@ export async function generateResponse(
       : "Lo siento, intenta de nuevo.";
   } catch (error) {
     logger.error({ error }, "Response generation failed");
-    return "Estamos experimentando problemas. Intenta de nuevo.";
+    return isEnglish
+      ? "We're experiencing issues. Try again."
+      : "Estamos experimentando problemas. Intenta de nuevo.";
   }
-}
-
-async function formatRichResponse(
-  events: Event[],
-  userMessage: string,
-  city: string,
-  language: "es" | "en",
-  userPhone?: string,
-  budget?: "free" | "low" | "high" | null
-): Promise<string> {
-  const logger = getLogger();
-  const isEn = language === "en";
-  const eventsPerMessage = 4;
-
-  // Group events by day for multi-day queries
-  const dayGroups = groupEventsByDay(events, language);
-
-  // Build all messages
-  const allMessages: string[] = [];
-
-  for (const group of dayGroups) {
-    const header = isEn
-      ? `📋 *${group.label}* in ${city}:`
-      : `📋 *${group.label}* en ${city}:`;
-
-    // Split into chunks of eventsPerMessage
-    for (let i = 0; i < group.events.length; i += eventsPerMessage) {
-      const chunk = group.events.slice(i, i + eventsPerMessage);
-      const cards = chunk.map((e) => formatEventCard(e, language)).join("\n\n---\n\n");
-
-      const isFirst = i === 0;
-      const msgParts: string[] = [];
-
-      if (isFirst) {
-        msgParts.push(header);
-      }
-
-      msgParts.push(cards);
-
-      // Show remaining count on last chunk
-      const remaining = group.events.length - (i + eventsPerMessage);
-      if (remaining > 0) {
-        // More chunks coming for this day
-      }
-
-      allMessages.push(msgParts.join("\n\n"));
-    }
-  }
-
-  // Add budget hint if applicable
-  let budgetHint = "";
-  if (budget === "free") {
-    budgetHint = isEn ? "\n💚 Showing free/no-cost options" : "\n💚 Mostrando opciones gratis";
-  } else if (budget === "low") {
-    budgetHint = isEn ? "\n💰 Showing budget-friendly options" : "\n💰 Mostrando opciones economicas";
-  } else if (budget === "high") {
-    budgetHint = isEn ? "\n✨ Showing premium options" : "\n✨ Mostrando opciones premium";
-  }
-
-  // Add final suggestion to the last message
-  const suggestion = isEn
-    ? `${budgetHint}\n\nWant more details on any? 🎶`
-    : `${budgetHint}\n\nQuieres mas detalles de alguno? 🎶`;
-
-  if (allMessages.length > 0) {
-    allMessages[allMessages.length - 1] += suggestion;
-  }
-
-  // Send poster images for first few events
-  if (userPhone) {
-    let imagesSent = 0;
-    for (const group of dayGroups) {
-      for (const e of group.events) {
-        if (imagesSent >= 3) break;
-        const imgUrl = (e as any).imageUrl || (e as any).image_url;
-        if (imgUrl && imgUrl.startsWith("http")) {
-          try {
-            await sendImageMessage(userPhone, imgUrl, `${(e as any).title}`);
-            imagesSent++;
-          } catch {
-            // Skip failed images
-          }
-        }
-      }
-    }
-  }
-
-  // Send additional messages if there are multiple
-  if (userPhone && allMessages.length > 1) {
-    const { sendTextMessage } = await import("../whatsapp/sender.js");
-    // Return first message, send the rest as separate messages
-    for (let i = 1; i < allMessages.length; i++) {
-      try {
-        await sendTextMessage(userPhone, allMessages[i]);
-      } catch {
-        logger.warn("Failed to send additional event message");
-      }
-    }
-  }
-
-  return allMessages[0] || (isEn ? "No events found." : "No hay eventos.");
-}
-
-interface DayGroup {
-  label: string;
-  events: Event[];
-}
-
-function groupEventsByDay(events: Event[], language: "es" | "en"): DayGroup[] {
-  const isEn = language === "en";
-  const smaToday = getSMAToday();
-  const smaTomorrow = new Date(smaToday);
-  smaTomorrow.setDate(smaTomorrow.getDate() + 1);
-
-  const groups = new Map<string, { label: string; events: Event[] }>();
-
-  for (const e of events) {
-    const eventDate = (e as any).eventDate || (e as any).event_date;
-    let dayKey: string;
-    let dayLabel: string;
-
-    if (!eventDate) {
-      dayKey = "ongoing";
-      dayLabel = isEn ? "Ongoing" : "Sin fecha específica";
-    } else {
-      const d = new Date(eventDate);
-      const smaDt = new Date(d.getTime() + SMA_TZ_OFFSET * 3600000);
-      const smaDay = new Date(smaDt.getFullYear(), smaDt.getMonth(), smaDt.getDate());
-
-      dayKey = smaDay.toISOString().split("T")[0];
-
-      if (smaDay.getTime() === smaToday.getTime()) {
-        dayLabel = isEn ? "Today" : "Hoy";
-      } else if (smaDay.getTime() === smaTomorrow.getTime()) {
-        dayLabel = isEn ? "Tomorrow" : "Mañana";
-      } else {
-        dayLabel = smaDt.toLocaleDateString(isEn ? "en-US" : "es-MX", {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-        });
-        // Capitalize first letter
-        dayLabel = dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1);
-      }
-    }
-
-    if (!groups.has(dayKey)) {
-      groups.set(dayKey, { label: dayLabel, events: [] });
-    }
-    groups.get(dayKey)!.events.push(e);
-  }
-
-  return Array.from(groups.values());
 }
 
 /**
@@ -393,40 +379,4 @@ export function formatShareMessage(event: any, language: "es" | "en" = "es"): st
   }
 
   return lines.join("\n");
-}
-
-function getDateLabel(events: Event[], language: "es" | "en"): string {
-  const isEn = language === "en";
-  const smaToday = getSMAToday();
-  const smaTomorrow = new Date(smaToday);
-  smaTomorrow.setDate(smaTomorrow.getDate() + 1);
-
-  const dates = events
-    .map((e) => {
-      const d = (e as any).eventDate || (e as any).event_date;
-      return d ? new Date(d) : null;
-    })
-    .filter((d): d is Date => d !== null);
-
-  if (dates.length === 0) return "";
-
-  const earliest = new Date(Math.min(...dates.map((d) => d.getTime())));
-  // Convert to SMA date for comparison
-  const earliestSMA = new Date(earliest.getTime() + SMA_TZ_OFFSET * 3600000);
-  const earliestDay = new Date(earliestSMA.getFullYear(), earliestSMA.getMonth(), earliestSMA.getDate());
-
-  if (earliestDay.getTime() === smaToday.getTime()) {
-    return isEn ? "today" : "hoy";
-  }
-
-  if (earliestDay.getTime() === smaTomorrow.getTime()) {
-    return isEn ? "tomorrow" : "mañana";
-  }
-
-  const dayName = earliestSMA.toLocaleDateString(isEn ? "en-US" : "es-MX", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
-  return isEn ? `on ${dayName}` : `el ${dayName}`;
 }

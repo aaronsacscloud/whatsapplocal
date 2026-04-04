@@ -52,6 +52,7 @@ export const events = pgTable(
     eventDate: timestamp("event_date", { withTimezone: true }),
     eventEndDate: timestamp("event_end_date", { withTimezone: true }),
     category: categoryEnum("category").default("other"),
+    contentType: text("content_type").default("event"), // 'event' | 'activity' | 'post'
     description: text("description"),
     sourceUrl: text("source_url"),
     sourceType: sourceTypeEnum("source_type"),

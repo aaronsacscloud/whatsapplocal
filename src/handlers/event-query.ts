@@ -55,9 +55,15 @@ export async function handleEventQuery(
   }
 
   // Standard event query flow — pass budget filter if detected
+  // The responder now sends structured cards directly (images + cards + summary)
+  // so we only need to send the first card as text if there are no events
+  // (LLM fallback case)
   const response = await generateResponse(body, events, city, conversationHistory, language, from, classification.budget);
 
-  await sendTextMessage(from, response);
+  // If no events were found, the LLM response was returned but not sent yet
+  if (events.length === 0) {
+    await sendTextMessage(from, response);
+  }
 
   // Send action buttons if we found events
   if (events.length > 0) {

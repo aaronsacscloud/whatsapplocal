@@ -153,6 +153,7 @@ async function getTodayEvents(): Promise<Event[]> {
     sql.raw(
       `SELECT * FROM events
        WHERE city = 'San Miguel de Allende'
+         AND (content_type = 'event' OR content_type IS NULL)
          AND event_date >= '${start.toISOString()}'::timestamptz
          AND event_date < '${end.toISOString()}'::timestamptz
        ORDER BY event_date ASC

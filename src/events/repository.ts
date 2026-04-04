@@ -48,6 +48,7 @@ export interface SearchFilters {
   dateTo?: Date;
   query?: string;
   limit?: number;
+  contentType?: string; // 'event' | 'activity' | 'post' — defaults to 'event'
 }
 
 export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
@@ -55,6 +56,12 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
 
   // Build raw SQL for reliable date handling with postgres-js
   const conditions: string[] = [`city = '${filters.city.replace(/'/g, "''")}'`];
+
+  // Filter by content_type (default to 'event' to exclude FB posts and activities)
+  const contentType = filters.contentType || "event";
+  if (contentType !== "all") {
+    conditions.push(`(content_type = '${contentType.replace(/'/g, "''")}' OR content_type IS NULL)`);
+  }
 
   if (filters.neighborhood) {
     conditions.push(`neighborhood ILIKE '%${filters.neighborhood.replace(/'/g, "''")}%'`);
@@ -65,11 +72,11 @@ export async function searchEvents(filters: SearchFilters): Promise<Event[]> {
   }
 
   if (filters.dateFrom) {
-    conditions.push(`(event_date >= '${filters.dateFrom.toISOString()}'::timestamptz OR event_date IS NULL)`);
+    conditions.push(`event_date >= '${filters.dateFrom.toISOString()}'::timestamptz`);
   }
 
   if (filters.dateTo) {
-    conditions.push(`(event_date <= '${filters.dateTo.toISOString()}'::timestamptz OR event_date IS NULL)`);
+    conditions.push(`event_date <= '${filters.dateTo.toISOString()}'::timestamptz`);
   }
 
   if (filters.query) {
@@ -104,6 +111,39 @@ export async function expireOldEvents(): Promise<number> {
     )
     .returning({ id: events.id });
 
+  return result.length;
+}
+
+export async function countEventsForDate(
+  city: string,
+  dateStart: Date,
+  dateEnd: Date
+): Promise<number> {
+  const db = getDb();
+  const result = await db.execute(
+    sql.raw(
+      `SELECT COUNT(*) as cnt FROM events
+       WHERE city = '${city.replace(/'/g, "''")}'
+         AND content_type = 'event'
+         AND event_date >= '${dateStart.toISOString()}'::timestamptz
+         AND event_date < '${dateEnd.toISOString()}'::timestamptz`
+    )
+  );
+  const rows = result as unknown as Array<{ cnt: string }>;
+  return parseInt(rows[0]?.cnt || "0", 10);
+}
+
+export async function deleteEventsOlderThan(cutoffDate: Date): Promise<number> {
+  const db = getDb();
+  const result = await db
+    .delete(events)
+    .where(
+      and(
+        sql`${events.eventDate} IS NOT NULL`,
+        lte(events.eventDate, cutoffDate)
+      )
+    )
+    .returning({ id: events.id });
   return result.length;
 }
 

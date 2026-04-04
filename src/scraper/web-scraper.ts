@@ -85,12 +85,26 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
     const [, eventUrl, title, detailsBlock] = match;
 
     const venue = extractField(detailsBlock, "Venue");
-    const dateStr = extractField(detailsBlock, "Date") ||
-      extractDateFromUrl(eventUrl);
+    const fieldDate = extractField(detailsBlock, "Date");
+    const urlDateTime = extractDateTimeFromUrl(eventUrl);
+    const htmlTime = extractTimeFromHTML(detailsBlock);
     const category = extractField(detailsBlock, "Event Category");
     const genres = extractField(detailsBlock, "Genres");
     const area = extractField(detailsBlock, "Area");
     const performers = extractField(detailsBlock, "Performers");
+
+    // Build the best date+time string we can
+    let dateStr: string | undefined;
+    if (urlDateTime) {
+      // Prefer URL datetime (most reliable)
+      const time = urlDateTime.time || htmlTime;
+      const isoString = time
+        ? `${urlDateTime.date}T${time}:00-06:00`   // SMA timezone CST
+        : `${urlDateTime.date}T00:00:00-06:00`;
+      dateStr = isoString;
+    } else if (fieldDate) {
+      dateStr = fieldDate;
+    }
 
     // Extract image
     const imgMatch = detailsBlock.match(/<img[^>]*src="([^"]*)"[^>]*>/i);
@@ -193,10 +207,53 @@ function extractField(html: string, fieldName: string): string | null {
   return match ? match[1].trim() : null;
 }
 
-function extractDateFromUrl(url: string): string | null {
-  // URLs like /event/name/2026-04-05/20:00
-  const match = url.match(/(\d{4}-\d{2}-\d{2})/);
-  return match ? match[1] : null;
+function extractDateTimeFromUrl(url: string): { date: string; time: string | null } | null {
+  const dateMatch = url.match(/(\d{4}-\d{2}-\d{2})/);
+  if (!dateMatch) return null;
+  const timeMatch = url.match(/(\d{4}-\d{2}-\d{2})\/(\d{2}:\d{2})/);
+  return {
+    date: dateMatch[1],
+    time: timeMatch ? timeMatch[2] : null,
+  };
+}
+
+/**
+ * Extract time from HTML text near an event listing.
+ * Looks for patterns like "11:30am", "8:00pm", "19:30", "8 PM"
+ */
+function extractTimeFromHTML(html: string): string | null {
+  // Match 12-hour time: "8:00pm", "11:30 AM", "8 pm"
+  const time12Match = html.match(/(\d{1,2}):(\d{2})\s*(am|pm|AM|PM)/);
+  if (time12Match) {
+    let hours = parseInt(time12Match[1], 10);
+    const minutes = time12Match[2];
+    const period = time12Match[3].toLowerCase();
+    if (period === "pm" && hours !== 12) hours += 12;
+    if (period === "am" && hours === 12) hours = 0;
+    return `${hours.toString().padStart(2, "0")}:${minutes}`;
+  }
+
+  // Match "8 PM" / "8PM" (no minutes)
+  const timeNoMinMatch = html.match(/\b(\d{1,2})\s*(am|pm|AM|PM)\b/);
+  if (timeNoMinMatch) {
+    let hours = parseInt(timeNoMinMatch[1], 10);
+    const period = timeNoMinMatch[2].toLowerCase();
+    if (period === "pm" && hours !== 12) hours += 12;
+    if (period === "am" && hours === 12) hours = 0;
+    return `${hours.toString().padStart(2, "0")}:00`;
+  }
+
+  // Match 24-hour time: "19:30", "20:00" (but not year-like 2026)
+  const time24Match = html.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (time24Match) {
+    const hours = parseInt(time24Match[1], 10);
+    // Skip if this looks like it's part of a date (e.g., within a URL date)
+    if (hours >= 6 && hours <= 23) {
+      return `${hours.toString().padStart(2, "0")}:${time24Match[2]}`;
+    }
+  }
+
+  return null;
 }
 
 function mapCategory(
@@ -261,6 +318,10 @@ function rawToNewEvent(
     ? new Date(eventDate.getTime() + 24 * 60 * 60 * 1000 - 1)
     : null;
 
+  // Web-scraped events from sanmiguellive/discoversma are real events
+  // (they have dates). If no date, classify as 'activity'.
+  const contentType = eventDate ? "event" : "activity";
+
   return {
     title: raw.title,
     venueName: raw.venue || null,
@@ -268,9 +329,10 @@ function rawToNewEvent(
     city,
     eventDate,
     category: (raw.category as any) || "other",
+    contentType,
     description: raw.description || null,
     sourceUrl: raw.url || sourceUrl,
-    sourceType: "facebook_page", // Using as generic "web" for now
+    sourceType: "website",
     confidence: 0.85,
     rawContent: JSON.stringify(raw).slice(0, 2000),
     imageUrl: raw.imageUrl || null,

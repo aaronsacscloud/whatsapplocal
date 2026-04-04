@@ -1,4 +1,4 @@
-import { runScrapeAll } from "../scraper/manager.js";
+import { runScrapeAll, runSmartScrape } from "../scraper/manager.js";
 import { getLogger } from "../utils/logger.js";
 import { updateJobState, shouldRunJob } from "./scheduler.js";
 
@@ -14,11 +14,11 @@ export async function executeScrapeJob(): Promise<void> {
     return;
   }
 
-  logger.info("Scrape job starting");
+  logger.info("Scrape job starting (smart mode)");
 
   try {
     await updateJobState(JOB_NAME, "running");
-    const result = await runScrapeAll();
+    const result = await runSmartScrape();
     await updateJobState(JOB_NAME, "idle");
 
     logger.info(result, "Scrape job completed");

@@ -19,6 +19,7 @@ export async function searchFromClassification(
       ? classification.query
       : undefined,
     limit: 30, // Enough for multi-day queries, responder handles pagination
+    contentType: "event", // Default: only real events with dates
   };
 
   // Parse date expressions
@@ -38,7 +39,13 @@ export async function searchFromClassification(
     filters.dateTo = nextWeek;
   }
 
-  const results = await searchEvents(filters);
+  let results = await searchEvents(filters);
+
+  // Fallback: if no events found, also include activities
+  if (results.length === 0) {
+    filters.contentType = "all";
+    results = await searchEvents(filters);
+  }
 
   // Boost events matching user interests (put matching categories first)
   if (interests && interests.length > 0 && !classification.category) {
