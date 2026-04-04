@@ -1,5 +1,5 @@
 import { scrapeSource } from "./apify.js";
-import { normalizeApifyPosts } from "./normalizer.js";
+import { normalizeApifyPost } from "./normalizer.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
 import { scrapeEventbrite, scrapeBandsintown } from "./platform-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
@@ -8,9 +8,11 @@ import {
   recordScrapeSuccess,
   recordScrapeFailure,
 } from "./health.js";
+import { updateSourceQuality, getSourcesByQuality, shouldSkipSource } from "./source-quality.js";
 import { upsertEvent, countEventsForDate, deleteEventsOlderThan } from "../events/repository.js";
 import { analyzeEventImage, enrichEventWithImageData } from "./image-enricher.js";
 import type { NewEvent } from "../db/schema.js";
+import type { ApifyFacebookPost } from "./apify.js";
 import { extractEvent } from "../llm/extractor.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
@@ -214,8 +216,11 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
 
   // Only scrape Facebook if fewer than 5 events for today
   if (todayCount < 5 && config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
-    logger.info("Smart scrape: running Facebook scrapers (need more events)");
-    const apifyResult = await runApifyScrapers();
+    logger.info("Smart scrape: running Facebook scrapers with quality filter (need more events)");
+    const apifyResult = await runApifyScrapers({
+      useQualityFilter: true,
+      maxSources: 15,
+    });
     result.sourcesProcessed += apifyResult.sourcesProcessed;
     result.eventsInserted += apifyResult.eventsInserted;
     result.duplicatesSkipped += apifyResult.duplicatesSkipped;
@@ -232,17 +237,65 @@ export async function runSmartScrape(): Promise<ScrapeResult> {
 }
 
 /**
- * Scrape Facebook pages via Apify
+ * Maximum images to analyze per Facebook page per scrape (cost control).
  */
-async function runApifyScrapers(): Promise<ScrapeResult> {
+const MAX_IMAGES_PER_PAGE = 3;
+
+export interface ApifyScrapeOptions {
+  /** If true, filter sources by quality score and skip low-quality ones */
+  useQualityFilter?: boolean;
+  /** Max sources to scrape (used with quality sorting) */
+  maxSources?: number;
+}
+
+/**
+ * Scrape Facebook pages via Apify with image-first pipeline.
+ *
+ * For each page:
+ * 1. Scrape posts via Apify
+ * 2. Prioritize posts with images (flyers have the best event data)
+ * 3. Run Claude Vision on image posts (up to MAX_IMAGES_PER_PAGE)
+ * 4. Fall back to text extraction for non-image posts
+ * 5. Track quality: how many events came from images vs text
+ */
+export async function runApifyScrapers(
+  options: ApifyScrapeOptions = {}
+): Promise<ScrapeResult> {
   const logger = getLogger();
   const config = getConfig();
-  const activeSources = await getActiveSources();
 
-  // Only process facebook_page sources
-  const fbSources = activeSources.filter(
-    (s) => s.type === "facebook_page" && !s.url.includes("sanmiguellive") && !s.url.includes("discoversma")
-  );
+  let fbSources;
+
+  if (options.useQualityFilter) {
+    // Smart mode: get sources sorted by quality, filter out bad ones
+    const qualitySources = await getSourcesByQuality(options.maxSources ?? 15);
+    const skipped: Array<{ name: string; reason: string }> = [];
+
+    fbSources = qualitySources.filter((s) => {
+      const { skip, reason } = shouldSkipSource(s);
+      if (skip) {
+        skipped.push({ name: s.name, reason });
+      }
+      return !skip;
+    });
+
+    if (skipped.length > 0) {
+      logger.info(
+        { skipped },
+        "Skipped low-quality Facebook sources"
+      );
+    }
+  } else {
+    // Default mode: get all active sources
+    const activeSources = await getActiveSources();
+    fbSources = activeSources.filter(
+      (s) =>
+        s.type === "facebook_page" &&
+        s.url.includes("facebook.com") &&
+        !s.url.includes("sanmiguellive") &&
+        !s.url.includes("discoversma")
+    );
+  }
 
   const result: ScrapeResult = {
     sourcesProcessed: 0,
@@ -254,70 +307,45 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
   for (const source of fbSources) {
     try {
       const rawPosts = await scrapeSource(source.url);
-      const normalized = normalizeApifyPosts(
+
+      const scrapeStats = await processPostsImageFirst(
         rawPosts,
         config.DEFAULT_CITY,
-        source.url
+        source.url,
+        logger
       );
 
-      // Enrich events with LLM text extraction + image analysis
-      for (const event of normalized) {
-        // Text-based enrichment
-        if (event.rawContent) {
-          const extraction = await extractEvent(event.rawContent);
-          // Category
-          if (extraction.category && (!event.category || event.category === "other")) {
-            event.category = extraction.category as any;
-          }
-          if (extraction.neighborhood && !event.neighborhood) event.neighborhood = extraction.neighborhood;
-          // CRITICAL: extract the REAL event date from text (not the FB post date)
-          if (extraction.eventDate) {
-            try {
-              const parsedDate = new Date(extraction.eventDate);
-              if (!isNaN(parsedDate.getTime())) {
-                event.eventDate = parsedDate;
-                event.contentType = "event";
-              }
-            } catch {}
-          }
-          // Recurring/workshop fields
-          if (extraction.isRecurring && !event.recurrenceDay) {
-            event.contentType = "recurring";
-            event.recurrenceDay = extraction.recurrenceDay;
-            event.recurrenceTime = extraction.recurrenceTime;
-          }
-          if (extraction.price && !event.price) event.price = extraction.price;
-          if (extraction.duration && !event.duration) event.duration = extraction.duration;
-        }
-
-        // Image-based enrichment: analyze the post image/flyer with Claude Vision
-        if (event.imageUrl) {
-          try {
-            const imageData = await analyzeEventImage(event.imageUrl);
-            if (imageData) {
-              enrichEventWithImageData(event, imageData);
-              logger.debug({ title: event.title }, "Event enriched from image");
-            }
-          } catch {
-            // Skip image analysis failures silently
-          }
-        }
-      }
-
-      const { unique, duplicates } = await deduplicateEvents(normalized);
+      const { unique, duplicates } = await deduplicateEvents(scrapeStats.events);
 
       for (const event of unique) {
         await upsertEvent(event);
       }
 
       await recordScrapeSuccess(source.id);
+
+      // Update source quality with event counts
+      await updateSourceQuality(
+        source.id,
+        unique.length,
+        scrapeStats.eventsFromImages
+      );
+
       result.sourcesProcessed++;
       result.eventsInserted += unique.length;
       result.duplicatesSkipped += duplicates;
 
       logger.info(
-        { source: source.name, inserted: unique.length, duplicates },
-        "Facebook source scraped"
+        {
+          source: source.name,
+          totalPosts: rawPosts.length,
+          postsWithImages: scrapeStats.postsWithImages,
+          imagesAnalyzed: scrapeStats.imagesAnalyzed,
+          eventsFromImages: scrapeStats.eventsFromImages,
+          eventsFromText: scrapeStats.eventsFromText,
+          inserted: unique.length,
+          duplicates,
+        },
+        "Facebook source scraped (image-first)"
       );
     } catch (error) {
       result.errors++;
@@ -327,4 +355,172 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
   }
 
   return result;
+}
+
+interface PostProcessingStats {
+  events: NewEvent[];
+  postsWithImages: number;
+  imagesAnalyzed: number;
+  eventsFromImages: number;
+  eventsFromText: number;
+}
+
+/**
+ * Process posts with an image-first strategy:
+ * - Posts with images get priority: Claude Vision reads the flyer for dates/times
+ * - Posts without images get text-only extraction at lower confidence
+ */
+async function processPostsImageFirst(
+  rawPosts: ApifyFacebookPost[],
+  city: string,
+  sourceUrl: string,
+  logger: ReturnType<typeof getLogger>
+): Promise<PostProcessingStats> {
+  const events: NewEvent[] = [];
+  let postsWithImages = 0;
+  let imagesAnalyzed = 0;
+  let eventsFromImages = 0;
+  let eventsFromText = 0;
+
+  // Separate posts: image posts first (most valuable), then text-only
+  const imagePosts: ApifyFacebookPost[] = [];
+  const textOnlyPosts: ApifyFacebookPost[] = [];
+
+  for (const post of rawPosts) {
+    const hasImage =
+      post.media &&
+      post.media.length > 0 &&
+      (post.media[0].photo_image?.uri || post.media[0].thumbnail);
+
+    if (hasImage) {
+      imagePosts.push(post);
+      postsWithImages++;
+    } else {
+      textOnlyPosts.push(post);
+    }
+  }
+
+  // Phase 1: Process image posts with Claude Vision (up to MAX_IMAGES_PER_PAGE)
+  for (const post of imagePosts.slice(0, MAX_IMAGES_PER_PAGE)) {
+    const normalized = normalizeApifyPost(post, city, sourceUrl);
+    if (!normalized) continue;
+
+    // Run Vision on the image first — this is the primary source of truth
+    if (normalized.imageUrl) {
+      try {
+        const imageData = await analyzeEventImage(normalized.imageUrl);
+        imagesAnalyzed++;
+
+        if (imageData && imageData.hasEventInfo) {
+          enrichEventWithImageData(normalized, imageData);
+          normalized.confidence = 0.9; // High confidence for vision-extracted events
+          eventsFromImages++;
+          events.push(normalized);
+          logger.debug(
+            { title: normalized.title, date: normalized.eventDate },
+            "Event extracted from image (Vision)"
+          );
+          continue; // Skip text extraction for image-confirmed events
+        }
+      } catch {
+        // Fall through to text extraction
+      }
+    }
+
+    // Image didn't yield event info — try text extraction
+    const textEvent = await enrichWithTextExtraction(normalized, logger);
+    if (textEvent) {
+      textEvent.confidence = 0.5; // Lower confidence for text-only
+      eventsFromText++;
+      events.push(textEvent);
+    }
+  }
+
+  // Phase 2: Remaining image posts beyond MAX_IMAGES_PER_PAGE (text-only)
+  for (const post of imagePosts.slice(MAX_IMAGES_PER_PAGE)) {
+    const normalized = normalizeApifyPost(post, city, sourceUrl);
+    if (!normalized) continue;
+
+    const textEvent = await enrichWithTextExtraction(normalized, logger);
+    if (textEvent) {
+      textEvent.confidence = 0.5;
+      eventsFromText++;
+      events.push(textEvent);
+    }
+  }
+
+  // Phase 3: Text-only posts
+  for (const post of textOnlyPosts) {
+    const normalized = normalizeApifyPost(post, city, sourceUrl);
+    if (!normalized) continue;
+
+    const textEvent = await enrichWithTextExtraction(normalized, logger);
+    if (textEvent) {
+      textEvent.confidence = 0.5;
+      eventsFromText++;
+      events.push(textEvent);
+    }
+  }
+
+  return {
+    events,
+    postsWithImages,
+    imagesAnalyzed,
+    eventsFromImages,
+    eventsFromText,
+  };
+}
+
+/**
+ * Enrich an event using LLM text extraction.
+ * Returns the enriched event, or null if it's not worth keeping.
+ */
+async function enrichWithTextExtraction(
+  event: NewEvent,
+  logger: ReturnType<typeof getLogger>
+): Promise<NewEvent | null> {
+  if (!event.rawContent) return event;
+
+  try {
+    const extraction = await extractEvent(event.rawContent);
+
+    // Category
+    if (
+      extraction.category &&
+      (!event.category || event.category === "other")
+    ) {
+      event.category = extraction.category as any;
+    }
+    if (extraction.neighborhood && !event.neighborhood) {
+      event.neighborhood = extraction.neighborhood;
+    }
+
+    // Extract the REAL event date from text (not the FB post date)
+    if (extraction.eventDate) {
+      try {
+        const parsedDate = new Date(extraction.eventDate);
+        if (!isNaN(parsedDate.getTime())) {
+          event.eventDate = parsedDate;
+          event.contentType = "event";
+        }
+      } catch {
+        // Skip unparseable dates
+      }
+    }
+
+    // Recurring/workshop fields
+    if (extraction.isRecurring && !event.recurrenceDay) {
+      event.contentType = "recurring";
+      event.recurrenceDay = extraction.recurrenceDay;
+      event.recurrenceTime = extraction.recurrenceTime;
+    }
+
+    if (extraction.price && !event.price) event.price = extraction.price;
+    if (extraction.duration && !event.duration)
+      event.duration = extraction.duration;
+  } catch (error) {
+    logger.debug({ error, title: event.title }, "Text extraction failed");
+  }
+
+  return event;
 }

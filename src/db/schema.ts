@@ -94,6 +94,11 @@ export const sources = pgTable("sources", {
   longitude: real("longitude"),
   address: text("address"),
   googleMapsUrl: text("google_maps_url"),
+  eventsFound: integer("events_found").default(0),
+  eventsFromImages: integer("events_from_images").default(0),
+  lastUsefulEventAt: timestamp("last_useful_event_at", { withTimezone: true }),
+  qualityScore: real("quality_score").default(0.5),
+  totalScrapes: integer("total_scrapes").default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
