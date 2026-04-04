@@ -12,6 +12,11 @@ export interface ExtractionResult {
   eventDate: string | null;
   category: string | null;
   description: string | null;
+  isRecurring: boolean;
+  recurrenceDay: number | null; // 0=Sunday, 1=Monday... 6=Saturday
+  recurrenceTime: string | null; // "10:00" in 24h format
+  price: string | null;
+  duration: string | null;
 }
 
 const EMPTY_RESULT: ExtractionResult = {
@@ -24,6 +29,11 @@ const EMPTY_RESULT: ExtractionResult = {
   eventDate: null,
   category: null,
   description: null,
+  isRecurring: false,
+  recurrenceDay: null,
+  recurrenceTime: null,
+  price: null,
+  duration: null,
 };
 
 /**
@@ -48,6 +58,11 @@ function parseExtractionResponse(rawText: string): ExtractionResult {
     eventDate: parsed.eventDate ?? null,
     category: parsed.category ?? null,
     description: parsed.description ?? null,
+    isRecurring: parsed.isRecurring ?? false,
+    recurrenceDay: parsed.recurrenceDay ?? null,
+    recurrenceTime: parsed.recurrenceTime ?? null,
+    price: parsed.price ?? null,
+    duration: parsed.duration ?? null,
   };
 }
 

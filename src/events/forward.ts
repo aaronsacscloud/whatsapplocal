@@ -50,26 +50,44 @@ export async function processForwardedContentFromExtraction(
       }
     }
 
+    // Determine content_type from extraction
+    let contentType = "event";
+    if (extraction.isRecurring && extraction.recurrenceDay !== null) {
+      contentType = "recurring";
+    } else if (extraction.category === "class") {
+      contentType = "workshop";
+    }
+
+    const eventDate = extraction.eventDate ? new Date(extraction.eventDate) : null;
+
     const event = await upsertEvent({
       title: extraction.title ?? "Evento compartido",
       venueName: extraction.venueName,
       venueAddress: extraction.venueAddress,
       neighborhood: extraction.neighborhood,
       city: config.DEFAULT_CITY,
-      eventDate: extraction.eventDate
-        ? new Date(extraction.eventDate)
-        : null,
+      eventDate,
       category: (extraction.category as any) ?? "other",
+      contentType,
+      recurrenceDay: extraction.recurrenceDay,
+      recurrenceTime: extraction.recurrenceTime,
+      recurrenceEndDate: null,
+      workshopStartDate: contentType === "workshop" ? eventDate : null,
+      workshopEndDate: contentType === "workshop" && eventDate
+        ? new Date(eventDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+        : null,
+      price: extraction.price,
+      duration: extraction.duration,
       description: extraction.description,
       sourceType: "user_forwarded",
       confidence: extraction.confidence,
       rawContent: rawContent ?? null,
       dedupHash,
-      expiresAt: extraction.eventDate
-        ? new Date(
-            new Date(extraction.eventDate).getTime() + 6 * 60 * 60 * 1000
-          )
-        : null,
+      expiresAt: contentType === "recurring"
+        ? new Date(Date.now() + 180 * 24 * 60 * 60 * 1000)
+        : extraction.eventDate
+          ? new Date(new Date(extraction.eventDate).getTime() + 6 * 60 * 60 * 1000)
+          : null,
     });
 
     return { success: true, event, reason: "extracted" };

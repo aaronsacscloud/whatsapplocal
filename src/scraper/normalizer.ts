@@ -1,6 +1,7 @@
 import type { ApifyFacebookPost } from "./apify.js";
 import type { NewEvent } from "../db/schema.js";
 import { eventDeduplicationHash } from "../utils/hash.js";
+import { detectRecurrence, detectWorkshop, extractPrice, extractDuration } from "./web-scraper.js";
 
 /**
  * Normalize an Apify Facebook post into a NewEvent.
@@ -47,8 +48,37 @@ export function normalizeApifyPost(
     ? new Date(eventDate.getTime() + 7 * 24 * 60 * 60 * 1000) // 7 days for FB posts
     : null;
 
-  // Classify content_type based on event signals
-  const contentType = classifyContentType(text, isLikelyEvent, eventDate);
+  // Detect recurrence and workshop signals
+  const fullText = post.text;
+  const recurrence = detectRecurrence(fullText);
+  const isWorkshop = detectWorkshop(fullText);
+  const price = extractPrice(fullText);
+  const duration = extractDuration(fullText);
+
+  // Classify content_type based on event signals + recurrence + workshop detection
+  const contentType = classifyContentType(text, isLikelyEvent, eventDate, recurrence.isRecurring, isWorkshop);
+
+  // For recurring events, set a stable dedup hash and longer expiry
+  let finalExpiresAt = expiresAt;
+  if (contentType === "recurring") {
+    finalExpiresAt = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+    if (!dedupHash && venueName) {
+      dedupHash = eventDeduplicationHash(
+        venueName,
+        `recurring-${recurrence.recurrenceDay ?? "any"}`,
+        city
+      );
+    }
+  } else if (contentType === "workshop") {
+    finalExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    if (!dedupHash && venueName) {
+      dedupHash = eventDeduplicationHash(
+        venueName,
+        "workshop",
+        city
+      );
+    }
+  }
 
   return {
     title: extractTitle(post.text),
@@ -57,6 +87,15 @@ export function normalizeApifyPost(
     eventDate,
     category: "other", // LLM extractor will enrich this
     contentType,
+    recurrenceDay: recurrence.recurrenceDay,
+    recurrenceTime: recurrence.recurrenceTime,
+    recurrenceEndDate: null,
+    workshopStartDate: contentType === "workshop" ? eventDate : null,
+    workshopEndDate: contentType === "workshop" && eventDate
+      ? new Date(eventDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+      : null,
+    price,
+    duration,
     description: post.text.substring(0, 500),
     sourceUrl: post.url || sourceUrl,
     sourceType: "facebook_page",
@@ -64,7 +103,7 @@ export function normalizeApifyPost(
     rawContent: post.text.substring(0, 2000),
     imageUrl,
     dedupHash,
-    expiresAt,
+    expiresAt: finalExpiresAt,
   };
 }
 
@@ -126,15 +165,32 @@ function hasEventSignals(text: string): boolean {
 /**
  * Classify Facebook post into content_type:
  * - 'event': has specific date/time signals (tonight, this saturday, date, time)
+ * - 'recurring': happens on a specific day every week
+ * - 'workshop': is a class, taller, workshop, curso
  * - 'activity': recurring/permanent (every day, always, open daily, daily specials)
  * - 'post': generic content about the business (no event signals)
  */
 function classifyContentType(
   text: string,
   isLikelyEvent: boolean,
-  eventDate: Date | null
+  eventDate: Date | null,
+  isRecurring: boolean,
+  isWorkshop: boolean
 ): string {
-  // Strong date/time signals → event
+  // Workshop/class detection takes priority for recurring classes
+  if (isWorkshop && isRecurring) {
+    return "recurring"; // Recurring class = recurring content_type
+  }
+
+  if (isWorkshop) {
+    return "workshop";
+  }
+
+  if (isRecurring) {
+    return "recurring";
+  }
+
+  // Strong date/time signals -> event
   const specificDateSignals = [
     /esta noche|tonight/i,
     /hoy\b|today\b/i,

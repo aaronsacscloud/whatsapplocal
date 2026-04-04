@@ -52,7 +52,14 @@ export const events = pgTable(
     eventDate: timestamp("event_date", { withTimezone: true }),
     eventEndDate: timestamp("event_end_date", { withTimezone: true }),
     category: categoryEnum("category").default("other"),
-    contentType: text("content_type").default("event"), // 'event' | 'activity' | 'post'
+    contentType: text("content_type").default("event"), // 'event' | 'recurring' | 'workshop' | 'activity' | 'post'
+    recurrenceDay: integer("recurrence_day"), // 0=Sunday, 1=Monday... 6=Saturday
+    recurrenceTime: text("recurrence_time"), // "10:00" in 24h format
+    recurrenceEndDate: timestamp("recurrence_end_date", { withTimezone: true }),
+    workshopStartDate: timestamp("workshop_start_date", { withTimezone: true }),
+    workshopEndDate: timestamp("workshop_end_date", { withTimezone: true }),
+    price: text("price"), // "$100", "Gratis", "$500 USD"
+    duration: text("duration"), // "2 hours", "3 dias"
     description: text("description"),
     sourceUrl: text("source_url"),
     sourceType: sourceTypeEnum("source_type"),
@@ -70,6 +77,7 @@ export const events = pgTable(
       table.eventDate
     ),
     index("idx_events_dedup_hash").on(table.dedupHash),
+    index("idx_events_recurrence_day").on(table.recurrenceDay),
   ]
 );
 

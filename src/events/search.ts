@@ -19,7 +19,7 @@ export async function searchFromClassification(
       ? classification.query
       : undefined,
     limit: 30, // Enough for multi-day queries, responder handles pagination
-    contentType: "event", // Default: only real events with dates
+    contentType: "event", // Default: real events + recurring + workshops (handled by repository)
   };
 
   // Parse date expressions

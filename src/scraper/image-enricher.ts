@@ -134,6 +134,11 @@ export function enrichEventWithImageData(
     event.category = imageData.category as any;
   }
 
+  // Enrich price from image if not already set
+  if (imageData.price && !event.price) {
+    event.price = imageData.price;
+  }
+
   // Build richer description
   const extras: string[] = [];
   if (imageData.performers) extras.push(`Artistas: ${imageData.performers}`);

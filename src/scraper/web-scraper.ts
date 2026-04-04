@@ -289,6 +289,173 @@ function mapCategory(
   return "other";
 }
 
+/**
+ * Detect recurrence patterns in title and description.
+ * Returns { isRecurring, recurrenceDay, recurrenceTime } if found.
+ */
+export function detectRecurrence(title: string, description?: string): {
+  isRecurring: boolean;
+  recurrenceDay: number | null;
+  recurrenceTime: string | null;
+} {
+  const text = `${title} ${description || ""}`.toLowerCase();
+
+  // English day patterns: "Every Monday", "All Tuesdays", "Weekly on Wednesday"
+  const enDayMap: Record<string, number> = {
+    sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
+    thursday: 4, friday: 5, saturday: 6,
+    sundays: 0, mondays: 1, tuesdays: 2, wednesdays: 3,
+    thursdays: 4, fridays: 5, saturdays: 6,
+  };
+
+  // Spanish day patterns: "Cada lunes", "Todos los martes"
+  const esDayMap: Record<string, number> = {
+    domingo: 0, domingos: 0,
+    lunes: 1,
+    martes: 2,
+    "miércoles": 3, miercoles: 3,
+    jueves: 4,
+    viernes: 5,
+    "sábado": 6, sabado: 6, "sábados": 6, sabados: 6,
+  };
+
+  // Check "Every [day]" / "All [days]" / "Weekly on [day]"
+  const enPatterns = [
+    /every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s?/i,
+    /all\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s?/i,
+    /weekly\s+(?:on\s+)?(sunday|monday|tuesday|wednesday|thursday|friday|saturday)s?/i,
+  ];
+
+  for (const pattern of enPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const dayName = match[1].toLowerCase();
+      const day = enDayMap[dayName];
+      if (day !== undefined) {
+        return { isRecurring: true, recurrenceDay: day, recurrenceTime: extractTimeFromHTML(text) };
+      }
+    }
+  }
+
+  // Check "Cada [dia]" / "Todos los [dias]"
+  const esPatterns = [
+    /cada\s+(domingo|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado)s?/i,
+    /todos\s+los\s+(domingo|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado)s?/i,
+  ];
+
+  for (const pattern of esPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const dayName = match[1].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const day = esDayMap[dayName];
+      if (day !== undefined) {
+        return { isRecurring: true, recurrenceDay: day, recurrenceTime: extractTimeFromHTML(text) };
+      }
+    }
+  }
+
+  // Generic recurring signals (no specific day)
+  const genericRecurring = [
+    /\bweekly\b/i,
+    /\bsemanal\b/i,
+    /\bdaily\b/i,
+    /\bdiario\b/i,
+    /\bevery week\b/i,
+    /\bcada semana\b/i,
+  ];
+
+  for (const pattern of genericRecurring) {
+    if (pattern.test(text)) {
+      return { isRecurring: true, recurrenceDay: null, recurrenceTime: extractTimeFromHTML(text) };
+    }
+  }
+
+  return { isRecurring: false, recurrenceDay: null, recurrenceTime: null };
+}
+
+/**
+ * Detect if an event is a workshop/class based on category or text signals.
+ */
+export function detectWorkshop(title: string, category?: string, description?: string): boolean {
+  const text = `${title} ${category || ""} ${description || ""}`.toLowerCase();
+
+  const workshopSignals = [
+    /\bworkshop\b/i,
+    /\btaller\b/i,
+    /\bclase\b/i,
+    /\bclass\b/i,
+    /\bcurso\b/i,
+    /\bcourse\b/i,
+    /\blesson\b/i,
+    /\bleccion\b/i,
+    /\bseminar\b/i,
+    /\bseminario\b/i,
+    /\btraining\b/i,
+    /\bcapacitacion\b/i,
+    /workshops\s*\/?\s*classes/i,
+  ];
+
+  return workshopSignals.some((p) => p.test(text));
+}
+
+/**
+ * Extract price from text.
+ * Matches patterns like "$100", "Cover: $200", "Free", "Gratis", "$500 MXN", "$50 USD"
+ */
+export function extractPrice(text: string): string | null {
+  if (!text) return null;
+
+  const lower = text.toLowerCase();
+
+  // Check for free
+  if (/\bfree\b|\bgratis\b|\bgratuito\b|\bsin costo\b|\bno cover\b|\bentrada libre\b/i.test(lower)) {
+    return "Gratis";
+  }
+
+  // Match price patterns: $100, $100 MXN, $50 USD, Cover: $200, Entrada: $150
+  const pricePatterns = [
+    /(?:cover|entrada|costo|precio|price|fee|cost)[\s:]*\$?\s*(\d[\d,]*(?:\.\d{2})?)\s*(mxn|usd|pesos|dollars)?/i,
+    /\$\s*(\d[\d,]*(?:\.\d{2})?)\s*(mxn|usd|pesos|dollars)?/i,
+    /(\d[\d,]*(?:\.\d{2})?)\s*(mxn|usd|pesos|dollars)/i,
+  ];
+
+  for (const pattern of pricePatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const amount = match[1];
+      const currency = match[2] ? ` ${match[2].toUpperCase()}` : "";
+      return `$${amount}${currency}`;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract duration from text.
+ * Matches patterns like "2 hours", "2 horas", "3 dias", "90 minutes"
+ */
+export function extractDuration(text: string): string | null {
+  if (!text) return null;
+
+  const durationPatterns = [
+    /(\d+(?:\.\d+)?)\s*(hours?|horas?|hrs?)/i,
+    /(\d+(?:\.\d+)?)\s*(minutes?|minutos?|mins?)/i,
+    /(\d+)\s*(days?|d[ií]as?)/i,
+    /(\d+)\s*(weeks?|semanas?)/i,
+    /(\d+)\s*(months?|meses?)/i,
+  ];
+
+  for (const pattern of durationPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return `${match[1]} ${match[2]}`;
+    }
+  }
+
+  return null;
+}
+
 function rawToNewEvent(
   raw: ScrapedRawEvent,
   city: string,
@@ -313,14 +480,57 @@ function rawToNewEvent(
     );
   }
 
-  // Expire at end of day (23:59 UTC), not +6h from midnight
-  const expiresAt = eventDate
-    ? new Date(eventDate.getTime() + 24 * 60 * 60 * 1000 - 1)
-    : null;
+  // Detect recurrence from title and description
+  const recurrence = detectRecurrence(raw.title, raw.description);
+  const isWorkshop = detectWorkshop(raw.title, raw.category, raw.description);
 
-  // Web-scraped events from sanmiguellive/discoversma are real events
-  // (they have dates). If no date, classify as 'activity'.
-  const contentType = eventDate ? "event" : "activity";
+  // Extract price and duration from description
+  const fullText = `${raw.title} ${raw.description || ""}`;
+  const price = extractPrice(fullText);
+  const duration = extractDuration(fullText);
+
+  // Determine content_type
+  let contentType: string;
+  if (recurrence.isRecurring && recurrence.recurrenceDay !== null) {
+    contentType = "recurring";
+  } else if (isWorkshop) {
+    contentType = "workshop";
+  } else if (eventDate) {
+    contentType = "event";
+  } else if (recurrence.isRecurring) {
+    contentType = "recurring";
+  } else {
+    contentType = "activity";
+  }
+
+  // For recurring events, set a long expiry (6 months) or use recurrence_end_date
+  // For workshops, expiry is workshop_end_date
+  // For regular events, expire at end of day
+  let expiresAt: Date | null = null;
+  if (contentType === "event" && eventDate) {
+    expiresAt = new Date(eventDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+  } else if (contentType === "recurring") {
+    // Recurring events expire in 6 months by default
+    expiresAt = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+  }
+
+  // For recurring events without a specific date, generate a stable dedup hash
+  if (!dedupHash && contentType === "recurring" && raw.venue) {
+    dedupHash = eventDeduplicationHash(
+      raw.venue,
+      `recurring-${recurrence.recurrenceDay ?? "any"}`,
+      city
+    );
+  }
+
+  // For workshops without dedup, use title-based hash
+  if (!dedupHash && contentType === "workshop" && raw.title) {
+    dedupHash = eventDeduplicationHash(
+      raw.title,
+      "workshop",
+      city
+    );
+  }
 
   return {
     title: raw.title,
@@ -330,6 +540,15 @@ function rawToNewEvent(
     eventDate,
     category: (raw.category as any) || "other",
     contentType,
+    recurrenceDay: recurrence.recurrenceDay,
+    recurrenceTime: recurrence.recurrenceTime,
+    recurrenceEndDate: null,
+    workshopStartDate: contentType === "workshop" ? eventDate : null,
+    workshopEndDate: contentType === "workshop" && eventDate
+      ? new Date(eventDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+      : null,
+    price,
+    duration,
     description: raw.description || null,
     sourceUrl: raw.url || sourceUrl,
     sourceType: "website",

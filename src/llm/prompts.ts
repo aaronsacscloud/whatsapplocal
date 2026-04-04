@@ -55,14 +55,27 @@ Responde SOLO con un JSON valido:
   "venueAddress": string | null,
   "neighborhood": string | null,
   "eventDate": string | null (ISO 8601),
-  "category": "music" | "food" | "nightlife" | "culture" | "sports" | "popup" | "other" | null,
-  "description": string | null
+  "category": "music" | "food" | "nightlife" | "culture" | "sports" | "popup" | "wellness" | "tour" | "class" | "adventure" | "wine" | "other" | null,
+  "description": string | null,
+  "isRecurring": boolean,
+  "recurrenceDay": number | null,
+  "recurrenceTime": string | null,
+  "price": string | null,
+  "duration": string | null
 }
+
+Campos nuevos:
+- "isRecurring": true si el evento se repite cada semana (ej: "todos los martes", "every Wednesday", "cada viernes")
+- "recurrenceDay": dia de la semana si es recurrente (0=Domingo, 1=Lunes, 2=Martes, 3=Miercoles, 4=Jueves, 5=Viernes, 6=Sabado)
+- "recurrenceTime": hora en formato 24h si se menciona (ej: "10:00", "19:30")
+- "price": precio si se menciona (ej: "$100", "Gratis", "$500 MXN", "Free", "Cover: $200")
+- "duration": duracion si se menciona (ej: "2 hours", "2 horas", "90 minutes")
 
 Si el texto no contiene informacion de un evento, responde con isEvent: false y confidence baja.
 Extrae la mayor cantidad de campos posibles del texto.
 Si hay una fecha, conviertela a ISO 8601.
-Si no hay fecha explicita pero parece un evento recurrente, deja eventDate como null.`;
+Si no hay fecha explicita pero parece un evento recurrente, deja eventDate como null y pon isRecurring: true con el dia correspondiente.
+Si menciona "taller", "workshop", "clase", "class", "curso" es probablemente una clase/taller.`;
 
 export const RESPONDER_SYSTEM = `Eres un asistente local amigable que ayuda a descubrir eventos y actividades en la ciudad.
 Responde siempre en espanol informal pero respetuoso.

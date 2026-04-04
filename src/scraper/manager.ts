@@ -267,6 +267,14 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
           const extraction = await extractEvent(event.rawContent);
           if (extraction.category) event.category = extraction.category as any;
           if (extraction.neighborhood && !event.neighborhood) event.neighborhood = extraction.neighborhood;
+          // Enrich with recurring/workshop fields from LLM
+          if (extraction.isRecurring && !event.recurrenceDay) {
+            event.contentType = "recurring";
+            event.recurrenceDay = extraction.recurrenceDay;
+            event.recurrenceTime = extraction.recurrenceTime;
+          }
+          if (extraction.price && !event.price) event.price = extraction.price;
+          if (extraction.duration && !event.duration) event.duration = extraction.duration;
         }
 
         // Image-based enrichment: analyze the post image/flyer with Claude Vision
