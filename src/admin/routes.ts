@@ -1,5 +1,5 @@
 import { Router, json } from "express";
-import { eq, desc, sql, and, gte, lte, lt, count, asc, isNull } from "drizzle-orm";
+import { eq, desc, sql, and, gte, lte, lt, count, asc } from "drizzle-orm";
 import { getDb } from "../db/index.js";
 import {
   sources,
