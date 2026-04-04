@@ -11,6 +11,7 @@ import { handleVenueQuery } from "../handlers/venue-query.js";
 import { handleForward } from "../handlers/forward.js";
 import { handleFeedback } from "../handlers/feedback.js";
 import { handleUnknown } from "../handlers/unknown.js";
+import { handleLocalInfo } from "../handlers/local-info.js";
 
 export interface IncomingMessage {
   from: string;
@@ -68,6 +69,13 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
         await withRetry(
           () => handleVenueQuery(message.from, message.body, classification),
           "venue-query-handler"
+        );
+        break;
+
+      case "local_info":
+        await withRetry(
+          () => handleLocalInfo(message.from, message.body),
+          "local-info-handler"
         );
         break;
 

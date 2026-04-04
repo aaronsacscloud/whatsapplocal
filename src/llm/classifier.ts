@@ -6,6 +6,7 @@ export interface ClassificationResult {
   intent:
     | "event_query"
     | "venue_query"
+    | "local_info"
     | "forward_content"
     | "onboarding"
     | "feedback"

@@ -3,7 +3,7 @@ Analiza el mensaje del usuario y clasifica su intención.
 
 Responde SOLO con un JSON valido con la siguiente estructura:
 {
-  "intent": "event_query" | "venue_query" | "forward_content" | "onboarding" | "feedback" | "unknown",
+  "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "unknown",
   "city": string | null,
   "neighborhood": string | null,
   "date": string | null,
@@ -14,6 +14,7 @@ Responde SOLO con un JSON valido con la siguiente estructura:
 Intenciones:
 - event_query: preguntas sobre eventos, actividades, cosas para hacer. Ej: "que hay esta noche?", "eventos este fin de semana", "musica en vivo"
 - venue_query: preguntas sobre un lugar especifico. Ej: "que tiene Bar X?", "restaurantes con terraza en Palermo"
+- local_info: preguntas generales sobre la ciudad, recomendaciones, tips, transporte, seguridad, clima, historia, barrios, dónde comer/comprar. Ej: "como llego desde el aeropuerto?", "es seguro?", "donde hay cajeros?", "que barrio es mejor?", "donde como los mejores tacos?", "hay uber?"
 - forward_content: cuando el usuario reenvía un mensaje con info de un evento
 - onboarding: saludos o preguntas sobre como funciona. Ej: "hola", "que es esto?", "como funciona?"
 - feedback: comentarios sobre el servicio. Ej: "gracias", "no me sirvio", "muy bueno"

@@ -1,6 +1,7 @@
 import { getLLMClient } from "./client.js";
 import { RESPONDER_SYSTEM } from "./prompts.js";
 import { getLogger } from "../utils/logger.js";
+import { getLocalKnowledge } from "../knowledge/index.js";
 import type { Event } from "../db/schema.js";
 
 export async function generateResponse(
@@ -10,6 +11,7 @@ export async function generateResponse(
 ): Promise<string> {
   const logger = getLogger();
   const client = getLLMClient();
+  const knowledge = getLocalKnowledge();
 
   const eventsContext =
     events.length > 0
@@ -21,15 +23,21 @@ export async function generateResponse(
           .join("\n")
       : "No hay eventos disponibles para esta busqueda.";
 
+  // Include local knowledge as context so the bot always knows about the city
+  const systemWithKnowledge = `${RESPONDER_SYSTEM}
+
+CONOCIMIENTO LOCAL (usa esto para complementar tus respuestas con info real de la ciudad):
+${knowledge.substring(0, 3000)}`;
+
   try {
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 500,
-      system: RESPONDER_SYSTEM,
+      system: systemWithKnowledge,
       messages: [
         {
           role: "user",
-          content: `Ciudad: ${city}\n\nEventos encontrados:\n${eventsContext}\n\nMensaje del usuario: "${userMessage}"\n\nResponde al usuario de forma natural y conversacional.`,
+          content: `Ciudad: ${city}\n\nEventos encontrados:\n${eventsContext}\n\nMensaje del usuario: "${userMessage}"\n\nResponde al usuario de forma natural y conversacional. Si no hay eventos, usa tu conocimiento local para sugerir alternativas reales y específicas.`,
         },
       ],
     });
