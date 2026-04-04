@@ -168,6 +168,93 @@ function extractReservationInfo(text: string): string | null {
   return null;
 }
 
+/**
+ * Translate event titles and descriptions to the user's language.
+ * Uses Haiku for speed and cost efficiency.
+ * Only translates if the content appears to be in a different language.
+ */
+async function translateEventsIfNeeded(
+  events: Event[],
+  targetLanguage: "es" | "en"
+): Promise<Event[]> {
+  const logger = getLogger();
+
+  // Collect texts that need translation
+  const textsToTranslate: Array<{ index: number; field: "title" | "description"; text: string }> = [];
+
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i] as any;
+    const title = e.title || "";
+    const desc = e.description || "";
+
+    if (targetLanguage === "es") {
+      // User wants Spanish — check if content is in English
+      if (isLikelyEnglish(title)) textsToTranslate.push({ index: i, field: "title", text: title });
+      if (desc && isLikelyEnglish(desc)) textsToTranslate.push({ index: i, field: "description", text: desc });
+    } else {
+      // User wants English — check if content is in Spanish
+      if (isLikelySpanish(title)) textsToTranslate.push({ index: i, field: "title", text: title });
+      if (desc && isLikelySpanish(desc)) textsToTranslate.push({ index: i, field: "description", text: desc });
+    }
+  }
+
+  if (textsToTranslate.length === 0) return events;
+
+  // Batch translate with Haiku (single call for all texts)
+  try {
+    const client = getLLMClient();
+    const targetLabel = targetLanguage === "es" ? "español" : "English";
+
+    const prompt = textsToTranslate
+      .map((t, i) => `[${i}] ${t.text}`)
+      .join("\n");
+
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1000,
+      system: `Translate each numbered line to ${targetLabel}. Keep the [N] numbering. Only translate, don't add or remove content. Keep proper nouns (venue names, artist names) as-is.`,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const resultText = response.content[0].type === "text" ? response.content[0].text : "";
+
+    // Parse translations back
+    const translated = [...events] as any[];
+    for (const line of resultText.split("\n")) {
+      const match = line.match(/^\[(\d+)\]\s*(.+)/);
+      if (match) {
+        const idx = parseInt(match[1], 10);
+        const translatedText = match[2].trim();
+        if (idx >= 0 && idx < textsToTranslate.length) {
+          const { index, field } = textsToTranslate[idx];
+          translated[index] = { ...translated[index], [field]: translatedText };
+        }
+      }
+    }
+
+    return translated;
+  } catch (error) {
+    logger.debug({ error }, "Translation failed, using original text");
+    return events;
+  }
+}
+
+function isLikelyEnglish(text: string): boolean {
+  const englishWords = /\b(the|and|with|for|this|that|live|night|show|every|free|cover|music|at|from|join|us)\b/i;
+  const spanishWords = /\b(los|las|del|que|con|para|esta|cada|gratis|noche|vivo|desde)\b/i;
+  const enCount = (text.match(englishWords) || []).length;
+  const esCount = (text.match(spanishWords) || []).length;
+  return enCount > esCount && enCount >= 2;
+}
+
+function isLikelySpanish(text: string): boolean {
+  const spanishWords = /\b(los|las|del|que|con|para|esta|cada|gratis|noche|vivo|desde|evento|clase|taller)\b/i;
+  const englishWords = /\b(the|and|with|for|this|that|live|night|show|every|free|cover|music)\b/i;
+  const esCount = (text.match(spanishWords) || []).length;
+  const enCount = (text.match(englishWords) || []).length;
+  return esCount > enCount && esCount >= 2;
+}
+
 function getCategoryEmoji(category: string | null): string {
   const emojis: Record<string, string> = {
     music: "🎵", food: "🍽️", nightlife: "🌙", culture: "🎨",
@@ -252,10 +339,13 @@ async function sendStructuredEventCards(
   const maxEvents = 8;
   const eventsToShow = sorted.slice(0, maxEvents);
 
+  // Translate titles and descriptions to user's language if needed
+  const translatedEvents = await translateEventsIfNeeded(eventsToShow, language);
+
   // Build all card messages
   const cardMessages: Array<{ imageUrl?: string; imageCaption?: string; text: string }> = [];
 
-  for (const event of eventsToShow) {
+  for (const event of translatedEvents) {
     const imgUrl = (event as any).imageUrl || (event as any).image_url;
     const card = formatEventCard(event, language);
 
