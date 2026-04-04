@@ -28,19 +28,23 @@ function getSMAToday(): Date {
 function formatEventCard(e: any, language: "es" | "en"): string {
   const isEn = language === "en";
   const lines: string[] = [];
+  const rawContent = e.rawContent || e.raw_content || "";
 
   // 1. TITLE
   lines.push(`*${e.title}*`);
 
-  // 2. DESCRIPTION (clean, no duplicate of title)
+  // 2. DESCRIPTION (right below title for context)
   if (e.description) {
     let desc = e.description;
+    // Remove duplicate title from start
     const title = (e.title || "").toLowerCase();
     if (desc.toLowerCase().startsWith(title)) {
       desc = desc.substring(title.length).replace(/^[.,\-:\s]+/, "").trim();
     }
+    // Remove emojis from description to keep it clean
+    desc = desc.replace(/[\u{1F600}-\u{1F9FF}]/gu, "").trim();
     if (desc.length > 0) {
-      lines.push(desc.substring(0, 180) + (desc.length > 180 ? "..." : ""));
+      lines.push(desc.substring(0, 200) + (desc.length > 200 ? "..." : ""));
     }
   }
 
@@ -66,7 +70,7 @@ function formatEventCard(e: any, language: "es" | "en"): string {
     }
   }
 
-  // Recurring
+  // Recurring info
   const contentType = e.contentType || e.content_type;
   const recurrenceDay = e.recurrenceDay ?? e.recurrence_day;
   const recurrenceTime = e.recurrenceTime || e.recurrence_time;
@@ -91,10 +95,47 @@ function formatEventCard(e: any, language: "es" | "en"): string {
     lines.push(`Lugar: ${venue}${addr ? `, ${addr}` : ""}`);
   }
 
-  // 6. LINKS (separated by spacing)
+  // 6. EXTRAS (duration, performers, category, anything else relevant)
+  const extras: string[] = [];
+  const duration = e.duration;
+  if (duration) extras.push(`Duración: ${duration}`);
+
+  const category = e.category;
+  if (category && category !== "other") {
+    const catLabels: Record<string, { es: string; en: string }> = {
+      music: { es: "Música en vivo", en: "Live music" },
+      food: { es: "Gastronomía", en: "Food & dining" },
+      nightlife: { es: "Vida nocturna", en: "Nightlife" },
+      culture: { es: "Arte y cultura", en: "Art & culture" },
+      sports: { es: "Deportes", en: "Sports" },
+      wellness: { es: "Bienestar", en: "Wellness" },
+      tour: { es: "Tour / Recorrido", en: "Tour" },
+      class: { es: "Clase / Taller", en: "Class / Workshop" },
+      adventure: { es: "Aventura", en: "Adventure" },
+      wine: { es: "Vino y mezcal", en: "Wine & mezcal" },
+      popup: { es: "Pop-up / Festival", en: "Pop-up / Festival" },
+    };
+    const label = catLabels[category];
+    if (label) extras.push(`Tipo: ${isEn ? label.en : label.es}`);
+  }
+
+  // Extract performers/artists from description or raw content
+  const performers = extractPerformers(e.description || rawContent);
+  if (performers) extras.push(`Artistas: ${performers}`);
+
+  // Extract reservation info
+  const reservationInfo = extractReservationInfo(rawContent);
+  if (reservationInfo) extras.push(`Reservaciones: ${reservationInfo}`);
+
+  if (extras.length > 0) {
+    lines.push("");
+    lines.push(extras.join("\n"));
+  }
+
+  // 7. LINKS (separated by spacing)
   const sourceUrl = e.sourceUrl || e.source_url;
   if (sourceUrl || venue) {
-    lines.push(""); // spacing before links
+    lines.push("");
     if (sourceUrl) {
       lines.push(sourceUrl);
     }
@@ -104,6 +145,27 @@ function formatEventCard(e: any, language: "es" | "en"): string {
   }
 
   return lines.join("\n");
+}
+
+/** Extract performer/artist names from text */
+function extractPerformers(text: string): string | null {
+  if (!text) return null;
+  // Look for "Artistas: X" or "Performers: X" already in text
+  const match = text.match(/(?:artistas?|performers?|featuring|feat\.?|ft\.?|con|with)[:.]?\s*([^.|\n]{3,60})/i);
+  if (match) return match[1].trim();
+  return null;
+}
+
+/** Extract reservation contact info from text */
+function extractReservationInfo(text: string): string | null {
+  if (!text) return null;
+  // Look for phone numbers or WhatsApp
+  const phoneMatch = text.match(/(?:reserv|whatsapp|tel|call|llama)[^:]*[:.]?\s*(\+?\d[\d\s\-()]{7,20})/i);
+  if (phoneMatch) return phoneMatch[1].trim();
+  // Look for email
+  const emailMatch = text.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+  if (emailMatch) return emailMatch[1];
+  return null;
 }
 
 function getCategoryEmoji(category: string | null): string {
