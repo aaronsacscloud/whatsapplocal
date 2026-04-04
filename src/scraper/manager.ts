@@ -263,11 +263,24 @@ async function runApifyScrapers(): Promise<ScrapeResult> {
       // Enrich events with LLM text extraction + image analysis
       for (const event of normalized) {
         // Text-based enrichment
-        if ((!event.category || event.category === "other") && event.rawContent) {
+        if (event.rawContent) {
           const extraction = await extractEvent(event.rawContent);
-          if (extraction.category) event.category = extraction.category as any;
+          // Category
+          if (extraction.category && (!event.category || event.category === "other")) {
+            event.category = extraction.category as any;
+          }
           if (extraction.neighborhood && !event.neighborhood) event.neighborhood = extraction.neighborhood;
-          // Enrich with recurring/workshop fields from LLM
+          // CRITICAL: extract the REAL event date from text (not the FB post date)
+          if (extraction.eventDate) {
+            try {
+              const parsedDate = new Date(extraction.eventDate);
+              if (!isNaN(parsedDate.getTime())) {
+                event.eventDate = parsedDate;
+                event.contentType = "event";
+              }
+            } catch {}
+          }
+          // Recurring/workshop fields
           if (extraction.isRecurring && !event.recurrenceDay) {
             event.contentType = "recurring";
             event.recurrenceDay = extraction.recurrenceDay;

@@ -29,43 +29,44 @@ function formatEventCard(e: any, language: "es" | "en"): string {
   const isEn = language === "en";
   const lines: string[] = [];
 
-  const emoji = getCategoryEmoji(e.category);
-  lines.push(`${emoji} *${e.title}*`);
+  // 1. TITLE
+  lines.push(`*${e.title}*`);
 
-  // Venue + address
-  const venue = e.venueName || e.venue_name;
-  const addr = e.venueAddress || e.venue_address;
-  if (venue) {
-    lines.push(`📍 ${venue}${addr ? ` — ${addr}` : ", San Miguel de Allende"}`);
+  // 2. DESCRIPTION (clean, no duplicate of title)
+  if (e.description) {
+    let desc = e.description;
+    const title = (e.title || "").toLowerCase();
+    if (desc.toLowerCase().startsWith(title)) {
+      desc = desc.substring(title.length).replace(/^[.,\-:\s]+/, "").trim();
+    }
+    if (desc.length > 0) {
+      lines.push(desc.substring(0, 180) + (desc.length > 180 ? "..." : ""));
+    }
   }
 
-  // Date and time in SMA timezone
+  lines.push(""); // spacing
+
+  // 3. DATE AND TIME
   const eventDate = e.eventDate || e.event_date;
   if (eventDate) {
     const d = new Date(eventDate);
-    // Adjust to SMA timezone for display
     const smaDate = new Date(d.getTime() + SMA_TZ_OFFSET * 3600000);
     const dateStr = smaDate.toLocaleDateString(isEn ? "en-US" : "es-MX", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      timeZone: "UTC", // We already adjusted
+      weekday: "long", day: "numeric", month: "long", timeZone: "UTC",
     });
     const hasTime = d.getUTCHours() !== 0 || d.getUTCMinutes() !== 0;
     if (hasTime) {
       const timeStr = smaDate.toLocaleTimeString(isEn ? "en-US" : "es-MX", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: true,
-        timeZone: "UTC",
+        hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "UTC",
       });
-      lines.push(`📅 ${dateStr} — ${timeStr}`);
+      lines.push(`Fecha: ${dateStr}`);
+      lines.push(`Hora: ${timeStr}`);
     } else {
-      lines.push(`📅 ${dateStr}`);
+      lines.push(`Fecha: ${dateStr}`);
     }
   }
 
-  // Recurring event: show day + time
+  // Recurring
   const contentType = e.contentType || e.content_type;
   const recurrenceDay = e.recurrenceDay ?? e.recurrence_day;
   const recurrenceTime = e.recurrenceTime || e.recurrence_time;
@@ -73,33 +74,33 @@ function formatEventCard(e: any, language: "es" | "en"): string {
     const days = isEn
       ? ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
       : ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
-    const dayName = days[recurrenceDay] || "";
     const label = isEn ? "Every" : "Cada";
-    lines.push(`🔄 ${label} ${dayName}${recurrenceTime ? ` — ${recurrenceTime}` : ""}`);
+    lines.push(`${label} ${days[recurrenceDay] || ""}${recurrenceTime ? ` - ${recurrenceTime}` : ""}`);
   }
 
-  // Price
+  // 4. PRICE
   const price = e.price;
   if (price) {
-    lines.push(`🎟️ ${price}`);
+    lines.push(`Precio: ${price}`);
   }
 
-  // Description (brief)
-  if (e.description) {
-    const desc = e.description.substring(0, 150);
-    lines.push(desc + (e.description.length > 150 ? "..." : ""));
-  }
-
-  // Source URL
-  const sourceUrl = e.sourceUrl || e.source_url;
-  if (sourceUrl) {
-    lines.push(`🔗 ${sourceUrl}`);
-  }
-
-  // Google Maps
+  // 5. VENUE
+  const venue = e.venueName || e.venue_name;
+  const addr = e.venueAddress || e.venue_address;
   if (venue) {
-    const mapsUrl = getGoogleMapsUrl(venue, addr);
-    lines.push(`📌 ${mapsUrl}`);
+    lines.push(`Lugar: ${venue}${addr ? `, ${addr}` : ""}`);
+  }
+
+  // 6. LINKS (separated by spacing)
+  const sourceUrl = e.sourceUrl || e.source_url;
+  if (sourceUrl || venue) {
+    lines.push(""); // spacing before links
+    if (sourceUrl) {
+      lines.push(sourceUrl);
+    }
+    if (venue) {
+      lines.push(getGoogleMapsUrl(venue, addr));
+    }
   }
 
   return lines.join("\n");

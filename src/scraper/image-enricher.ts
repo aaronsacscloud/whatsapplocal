@@ -152,8 +152,9 @@ export function enrichEventWithImageData(
       : extraText;
   }
 
-  // Parse date from image if event has no date
-  if (imageData.date && !event.eventDate) {
+  // Parse date from image — ALWAYS override since image date is the REAL event date
+  // (the existing eventDate might be the FB post publication date, which is wrong)
+  if (imageData.date) {
     try {
       const parsed = new Date(imageData.date);
       if (!isNaN(parsed.getTime())) {
@@ -161,6 +162,24 @@ export function enrichEventWithImageData(
       }
     } catch {
       // Skip unparseable dates
+    }
+  }
+
+  // Parse time from image
+  if (imageData.time && !event.recurrenceTime) {
+    // Try to apply time to the event date
+    if (event.eventDate) {
+      const timeParts = imageData.time.match(/(\d{1,2}):?(\d{2})?\s*(am|pm|AM|PM)?/);
+      if (timeParts) {
+        let hours = parseInt(timeParts[1], 10);
+        const minutes = parseInt(timeParts[2] || "0", 10);
+        const period = (timeParts[3] || "").toLowerCase();
+        if (period === "pm" && hours !== 12) hours += 12;
+        if (period === "am" && hours === 12) hours = 0;
+        const d = new Date(event.eventDate);
+        d.setUTCHours(hours + 6, minutes, 0, 0); // +6 for SMA timezone to UTC
+        event.eventDate = d;
+      }
     }
   }
 
