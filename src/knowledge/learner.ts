@@ -88,8 +88,15 @@ export async function learnFromWeb(
 ): Promise<string | null> {
   const config = getConfig();
 
-  // Step 1: Search the web
-  const searchQuery = `${userQuery} ${city}`;
+  // Step 1: Clean query and search the web
+  // Remove filler words that hurt search quality
+  const cleanedQuery = userQuery
+    .replace(/^["']+|["']+$/g, "")              // strip quotes
+    .replace(/^(dame|dime|muestrame|dame mas|quiero)\s+(info|informacion|información|datos|mas|más)\s*(de|del|sobre|acerca de)?\s*/i, "")
+    .replace(/^(que es|what is|where is|donde esta|donde queda)\s*/i, "")
+    .trim() || userQuery;
+  const searchQuery = `${cleanedQuery} ${city}`;
+  logger.info({ original: userQuery, cleaned: cleanedQuery, searchQuery }, "Web search query");
   const searchResults = await webSearch(searchQuery);
 
   if (!searchResults || searchResults.length === 0) {
@@ -111,7 +118,7 @@ export async function learnFromWeb(
   }
 
   // Step 2.5: Search for reviews/opinions specifically
-  const reviewQuery = `${userQuery} opiniones reseñas`;
+  const reviewQuery = `${cleanedQuery} opiniones reseñas`;
   const reviewResults = await webSearch(reviewQuery);
   const reviewContents: string[] = [];
   for (const result of reviewResults.slice(0, 2)) {
