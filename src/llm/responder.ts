@@ -4,7 +4,7 @@ import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getGoogleMapsUrl } from "../utils/maps.js";
 import { generateGoogleCalendarUrl } from "../utils/calendar-links.js";
-import { shortenUrl } from "../utils/short-url.js";
+
 import { sendImageMessage, sendTextMessage } from "../whatsapp/sender.js";
 import { storeRecentEvents, markEventsShown, getNextEvents, getRemainingCount } from "../handlers/event-context.js";
 import type { Event } from "../db/schema.js";
@@ -134,22 +134,20 @@ async function formatEventCard(e: any, language: "es" | "en"): Promise<string> {
     lines.push(extras.join("\n"));
   }
 
-  // 7. LINKS (separated by spacing)
+  // 7. LINKS with labels
   const sourceUrl = e.sourceUrl || e.source_url;
-  if (sourceUrl || venue) {
-    lines.push("");
-    if (sourceUrl) {
-      lines.push(await shortenUrl(sourceUrl));
-    }
-    if (venue) {
-      lines.push(await getGoogleMapsUrl(venue, addr));
-    }
+  lines.push("");
+  if (sourceUrl) {
+    lines.push(isEn ? `More info: ${sourceUrl}` : `Mas info: ${sourceUrl}`);
+  }
+  if (venue) {
+    const mapsUrl = await getGoogleMapsUrl(venue, addr);
+    lines.push(isEn ? `Location: ${mapsUrl}` : `Ubicacion: ${mapsUrl}`);
   }
 
-  // 8. GOOGLE CALENDAR LINK
+  // 8. CALENDAR LINK
   const gcalUrl = await generateGoogleCalendarUrl(e);
-  lines.push("");
-  lines.push(language === "en"
+  lines.push(isEn
     ? `Add to calendar: ${gcalUrl}`
     : `Agregar al calendario: ${gcalUrl}`
   );
