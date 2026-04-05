@@ -133,6 +133,9 @@ function parseBandsintownHTML(html: string): NewEvent[] {
         const eventDate = item.startDate ? new Date(item.startDate) : null;
         const venueName = item.location?.name || null;
         const performer = item.performer?.name || item.performer?.[0]?.name || null;
+        // Get image from JSON-LD or performer image
+        const imageUrl = item.image?.[0] || item.image
+          || item.performer?.image || item.performer?.[0]?.image || null;
 
         events.push({
           title: performer
@@ -148,7 +151,7 @@ function parseBandsintownHTML(html: string): NewEvent[] {
           sourceType: "platform",
           confidence: 0.95,
           rawContent: JSON.stringify(item).substring(0, 2000),
-          imageUrl: item.image?.[0] || item.image || null,
+          imageUrl,
           dedupHash: venueName && eventDate
             ? eventDeduplicationHash(
                 performer || item.name || "concert",
@@ -168,4 +171,28 @@ function parseBandsintownHTML(html: string): NewEvent[] {
 
   logger.info({ count: events.length }, "Bandsintown events parsed");
   return events;
+}
+
+/**
+ * Fetch artist image from Bandsintown public API.
+ * Used as fallback for events without images.
+ */
+export async function fetchBandsintownArtistImage(artistName: string): Promise<string | null> {
+  try {
+    const encoded = encodeURIComponent(artistName);
+    const url = `https://rest.bandsintown.com/artists/${encoded}?app_id=squarespace-whatsapplocal`;
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as any;
+    const img = data?.image_url || data?.thumb_url || null;
+    if (img && img.startsWith("http") && !img.includes("no-img") && img.length > 20) {
+      return img;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

@@ -2,6 +2,7 @@ import { getDb } from "../db/index.js";
 import { events } from "../db/schema.js";
 import { eq, isNull, and, gt, sql } from "drizzle-orm";
 import { getLogger } from "../utils/logger.js";
+import { fetchBandsintownArtistImage } from "./platform-scraper.js";
 
 const logger = getLogger();
 
@@ -13,15 +14,14 @@ const logger = getLogger();
 export async function fillMissingImages(): Promise<number> {
   const db = getDb();
 
-  // Find events without images that have a source URL
+  // Find events without images
   const eventsWithoutImages = await db
-    .select({ id: events.id, title: events.title, sourceUrl: events.sourceUrl })
+    .select({ id: events.id, title: events.title, sourceUrl: events.sourceUrl, sourceType: events.sourceType })
     .from(events)
     .where(
       and(
         gt(events.eventDate, new Date()),
-        isNull(events.imageUrl),
-        sql`${events.sourceUrl} IS NOT NULL AND LENGTH(${events.sourceUrl}) > 10`
+        isNull(events.imageUrl)
       )
     )
     .limit(20); // Process 20 at a time to avoid rate limits
@@ -34,7 +34,22 @@ export async function fillMissingImages(): Promise<number> {
 
   for (const event of eventsWithoutImages) {
     try {
-      const imageUrl = await extractImageFromUrl(event.sourceUrl!);
+      let imageUrl: string | null = null;
+
+      // For Bandsintown events, extract artist name and try their API
+      if (event.sourceType === "platform" && event.title) {
+        // Title format: "Artist Name en Venue Name"
+        const artistMatch = event.title.match(/^(.+?)\s+en\s+/i);
+        if (artistMatch) {
+          imageUrl = await fetchBandsintownArtistImage(artistMatch[1].trim());
+        }
+      }
+
+      // Fallback: try to extract from source URL page
+      if (!imageUrl && event.sourceUrl && event.sourceUrl.length > 10) {
+        imageUrl = await extractImageFromUrl(event.sourceUrl);
+      }
+
       if (imageUrl) {
         await db
           .update(events)
