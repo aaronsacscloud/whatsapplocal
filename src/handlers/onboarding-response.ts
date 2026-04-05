@@ -1,258 +1,28 @@
-import { sendTextMessage, sendInteractiveList } from "../whatsapp/sender.js";
+import { sendTextMessage, sendInteractiveButtons } from "../whatsapp/sender.js";
 import { updatePreferences, getUserName } from "../users/repository.js";
 import { hashPhone } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
-import { getShareSuggestion } from "./invite.js";
-import { getTodayEventsText } from "./onboarding.js";
 import { saveMessage } from "../conversations/repository.js";
 
-type OnboardingStep = "name_question" | "interests_question";
-
-const INTEREST_MAP: Record<string, string> = {
-  "1": "music",
-  "2": "food",
-  "3": "culture",
-  "4": "nightlife",
-  "5": "wellness",
-  "6": "adventure",
-  "7": "wine",
-  "8": "everything",
-};
-
-/** Interest list row IDs used in the interactive list */
-const INTEREST_ROW_IDS = [
-  "interest_music",
-  "interest_food",
-  "interest_culture",
-  "interest_nightlife",
-  "interest_wellness",
-  "interest_adventure",
-  "interest_wine",
-  "interest_everything",
-];
-
-const INTEREST_ROW_MAP: Record<string, string> = {
-  interest_music: "music",
-  interest_food: "food",
-  interest_culture: "culture",
-  interest_nightlife: "nightlife",
-  interest_wellness: "wellness",
-  interest_adventure: "adventure",
-  interest_wine: "wine",
-  interest_everything: "everything",
-};
-
 /**
- * Detect what onboarding step the user is responding to based on
- * the last bot message stored in conversation history.
+ * Detect what onboarding step the user is responding to.
  */
 export function detectOnboardingStep(
   lastBotMessage: string | null
-): OnboardingStep | null {
+): "name_question" | null {
   if (!lastBotMessage) return null;
-
   const lower = lastBotMessage.toLowerCase();
 
-  // Step 1: We asked for name — message contains "como te llamas"
-  if (
-    lower.includes("como te llamas")
-  ) {
+  if (lower.includes("como te llamas")) {
     return "name_question";
-  }
-
-  // Step 3: We showed interest options — detect by interest keywords
-  if (
-    lower.includes("musica en vivo") ||
-    lower.includes("gastronomia") ||
-    lower.includes("de todo un poco") ||
-    lower.includes("que te interesa mas")
-  ) {
-    return "interests_question";
-  }
-
-  // Backward compat: old tourist/local question still routes to interests
-  // (existing onboarding_tourist/local/moving buttons are handled in interactive-reply.ts)
-  if (
-    lower.includes("turista de visita") ||
-    lower.includes("vivo aqui") ||
-    lower.includes("pensando en mudarme") ||
-    lower.includes("visiting as a tourist") ||
-    lower.includes("i live here") ||
-    lower.includes("thinking about moving")
-  ) {
-    return "interests_question";
-  }
-
-  // Backward compat: old English interest question
-  if (
-    lower.includes("live music") ||
-    lower.includes("food and restaurants") ||
-    lower.includes("a bit of everything")
-  ) {
-    return "interests_question";
   }
 
   return null;
 }
 
 /**
- * Send the interests selection message (Step 3).
- * Uses an interactive list for better UX, with numbered text fallback.
- */
-async function sendInterestsQuestion(from: string, name: string): Promise<void> {
-  const greeting = `Mucho gusto ${name}! Voy a ser tu guia personal. Te ayudo a encontrar los mejores eventos, restaurantes, actividades y experiencias en San Miguel.`;
-  await sendTextMessage(from, greeting);
-
-  const body = `Que te interesa mas? (puedes elegir varios)`;
-  const sections = [
-    {
-      title: "Intereses",
-      rows: [
-        { id: "interest_music", title: "Musica en vivo", description: "Conciertos, jazz, trova" },
-        { id: "interest_food", title: "Gastronomia", description: "Restaurantes, pop-ups, catas" },
-        { id: "interest_culture", title: "Arte y cultura", description: "Galerias, museos, teatro" },
-        { id: "interest_nightlife", title: "Vida nocturna", description: "Bares, fiestas, clubs" },
-        { id: "interest_wellness", title: "Bienestar", description: "Yoga, spa, temazcal" },
-        { id: "interest_adventure", title: "Tours y aventura", description: "Globo, cabalgata, outdoor" },
-        { id: "interest_wine", title: "Vino y mezcal", description: "Catas, vinerias, mezcalerias" },
-        { id: "interest_everything", title: "De todo un poco", description: "Todas las categorias" },
-      ],
-    },
-  ];
-
-  await sendInteractiveList(from, body, "Ver opciones", sections);
-
-  // Save the full greeting + interests question to conversation history
-  // so the router can detect the interests step on the next message
-  const phoneHash = hashPhone(from);
-  await saveMessage(phoneHash, "assistant", `${greeting}\n\n${body}\n\n1. Musica en vivo\n2. Gastronomia\n3. Arte y cultura\n4. Vida nocturna\n5. Bienestar\n6. Tours y aventura\n7. Vino y mezcal\n8. De todo un poco`, "onboarding");
-}
-
-/**
- * Handle the user's name reply (step 1 → step 2+3).
- * Saves the name and sends the interests question.
- */
-async function handleNameResponse(
-  from: string,
-  body: string,
-): Promise<boolean> {
-  const trimmed = body.trim();
-  const phoneHash = hashPhone(from);
-
-  // Basic validation: name should be 1-50 chars and look like a name (not a command)
-  if (trimmed.length === 0 || trimmed.length > 50) {
-    return false;
-  }
-
-  // If the message is only numbers, it's not a name
-  if (/^\d+$/.test(trimmed)) {
-    return false;
-  }
-
-  // Extract the first word as name (or full string if short enough)
-  // Capitalize first letter
-  const name = trimmed
-    .split(/\s+/)[0]
-    .replace(/^./, (c) => c.toUpperCase());
-
-  await updatePreferences(phoneHash, { name });
-
-  // Send Step 2 greeting + Step 3 interests question
-  await sendInterestsQuestion(from, name);
-
-  return true;
-}
-
-/**
- * Handle the user's interest selection (step 3 → completion).
- * Supports numbered text replies ("1, 3, 5"), single numbers ("8"),
- * and interactive list row IDs ("interest_music").
- */
-async function handleInterestsResponse(
-  from: string,
-  body: string,
-): Promise<boolean> {
-  const logger = getLogger();
-  const trimmed = body.trim();
-  const phoneHash = hashPhone(from);
-
-  let interests: string[] = [];
-
-  // Check if it's an interactive list reply ID
-  const interestFromId = INTEREST_ROW_MAP[trimmed];
-  if (interestFromId) {
-    if (interestFromId === "everything") {
-      interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
-    } else {
-      interests = [interestFromId];
-    }
-  } else {
-    // Try to match free-text interest names (e.g. "De todo un poco", "musica", "gastronomia")
-    const lower = trimmed.toLowerCase();
-    const TEXT_INTEREST_MAP: Record<string, string> = {
-      "musica": "music", "música": "music", "music": "music", "musica en vivo": "music", "jazz": "music", "conciertos": "music",
-      "gastronomia": "food", "gastronomía": "food", "comida": "food", "food": "food", "restaurantes": "food",
-      "arte": "culture", "cultura": "culture", "culture": "culture", "arte y cultura": "culture", "galerias": "culture",
-      "nightlife": "nightlife", "vida nocturna": "nightlife", "bares": "nightlife", "fiesta": "nightlife", "noche": "nightlife",
-      "bienestar": "wellness", "wellness": "wellness", "yoga": "wellness", "spa": "wellness",
-      "tours": "adventure", "aventura": "adventure", "adventure": "adventure", "tours y aventura": "adventure",
-      "vino": "wine", "mezcal": "wine", "wine": "wine", "vino y mezcal": "wine", "catas": "wine",
-      "todo": "everything", "de todo": "everything", "de todo un poco": "everything", "todas": "everything", "everything": "everything", "todos": "everything",
-    };
-
-    const matchedInterest = TEXT_INTEREST_MAP[lower];
-    if (matchedInterest) {
-      if (matchedInterest === "everything") {
-        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
-      } else {
-        interests = [matchedInterest];
-      }
-    } else {
-      // Parse comma-separated or space-separated numbers like "1, 3, 5" or "1 3 5" or "8"
-      const numbers = trimmed
-        .split(/[\s,]+/)
-        .map((s) => s.trim())
-        .filter((s) => /^[1-8]$/.test(s));
-
-      if (numbers.length === 0) {
-        // Default to "everything" if we're in the interests step but can't parse
-        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
-      } else if (numbers.includes("8")) {
-        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
-      } else {
-        interests = [...new Set(numbers.map((n) => INTEREST_MAP[n]).filter(Boolean))];
-      }
-    }
-  }
-
-  logger.info({ phoneHash: phoneHash.slice(-8), interests }, "User interests saved");
-
-  await updatePreferences(phoneHash, {
-    interests,
-    onboardingComplete: true,
-  });
-
-  // Fetch user name for personalized completion message
-  const name = await getUserName(phoneHash);
-  const nameStr = name ?? "amigo";
-
-  // Fetch today's top events matching their selected interests
-  const eventsText = await getTodayEventsText(interests);
-
-  const message = `Perfecto ${nameStr}! Ya te tengo. Cada vez que platiquemos voy aprendiendo mas de lo que te gusta para darte mejores recomendaciones.\n\nAqui tienes lo mejor de hoy:\n\n${eventsText}\n\nPreguntame lo que quieras sobre San Miguel!`;
-  await sendTextMessage(from, message);
-
-  // After onboarding, suggest sharing with friends
-  const shareSuggestion = getShareSuggestion("es");
-  await sendTextMessage(from, shareSuggestion);
-
-  return true;
-}
-
-/**
- * Try to handle a message as an onboarding response.
- * Returns true if the message was handled as an onboarding response.
- * Returns false if not — the caller should route it normally.
+ * Handle onboarding response (name reply).
+ * After receiving name: greet, mark complete, ask what they want to see.
  */
 export async function handleOnboardingResponse(
   from: string,
@@ -261,15 +31,46 @@ export async function handleOnboardingResponse(
   language: "es" | "en" = "es"
 ): Promise<boolean> {
   const step = detectOnboardingStep(lastBotMessage);
+  if (step !== "name_question") return false;
 
-  if (!step) return false;
+  const logger = getLogger();
+  const trimmed = body.trim();
+  const phoneHash = hashPhone(from);
 
-  switch (step) {
-    case "name_question":
-      return handleNameResponse(from, body);
-    case "interests_question":
-      return handleInterestsResponse(from, body);
-    default:
-      return false;
+  // Validate: name should be 1-50 chars and not purely numeric
+  if (trimmed.length === 0 || trimmed.length > 50 || /^\d+$/.test(trimmed)) {
+    return false;
   }
+
+  // Extract first word as name, capitalize
+  const name = trimmed
+    .split(/\s+/)[0]
+    .replace(/^./, (c) => c.toUpperCase());
+
+  // Save name and mark onboarding complete
+  await updatePreferences(phoneHash, {
+    name,
+    interests: ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"],
+    onboardingComplete: true,
+  });
+
+  logger.info({ phoneHash: phoneHash.slice(-8), name }, "Onboarding complete");
+
+  // Greet and ask what they want to see
+  const msg = `Mucho gusto ${name}! Voy a ser tu guia personal en San Miguel de Allende. Cada vez que platiquemos voy aprendiendo mas de lo que te gusta para darte mejores recomendaciones.\n\nQue te gustaria ver?`;
+  await sendTextMessage(from, msg);
+
+  try {
+    const buttons = [
+      { id: "onboard_today", title: "Eventos de hoy" },
+      { id: "onboard_tomorrow", title: "Eventos de manana" },
+      { id: "onboard_weekend", title: "Este fin de semana" },
+    ];
+    await sendInteractiveButtons(from, "Elige una opcion o preguntame lo que quieras", buttons);
+  } catch {
+    // Buttons are optional
+  }
+
+  await saveMessage(phoneHash, "assistant", msg, "onboarding");
+  return true;
 }

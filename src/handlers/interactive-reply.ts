@@ -47,6 +47,13 @@ export async function handleInteractiveReply(
     return handleOnboardingResponse(from, replyId, "que te interesa mas", language);
   }
 
+  // --- Onboarding: day selection buttons ---
+  if (replyId === "onboard_today" || replyId === "onboard_tomorrow" || replyId === "onboard_weekend") {
+    // Map button to a natural query and fall through to normal routing
+    // The router will classify it as event_query
+    return false;
+  }
+
   // --- Legacy onboarding button replies (backward compat) ---
   if (replyId === "onboarding_tourist") {
     await updatePreferences(phoneHash, { isTourist: true, language });
