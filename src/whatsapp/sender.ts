@@ -58,10 +58,12 @@ export async function sendImageMessage(
         file_url: imageUrl,
         caption: caption || "",
       });
-      logger.info({ to: to.slice(-4), url: imageUrl.substring(0, 50) }, "Image sent via Kapso");
+      // Log full Kapso response for debugging
+      const resultStr = JSON.stringify(result).substring(0, 300);
+      logger.info({ to: to.slice(-4), url: imageUrl.substring(0, 50), response: resultStr }, "Image sent via Kapso");
       return true;
     } catch (error: any) {
-      logger.warn({ error: error?.message?.substring(0, 100), url: imageUrl.substring(0, 60) }, "Kapso image failed, trying direct API");
+      logger.warn({ error: error?.message?.substring(0, 200), url: imageUrl.substring(0, 60) }, "Kapso image failed, trying direct API");
     }
   }
 

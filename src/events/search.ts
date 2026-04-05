@@ -147,6 +147,28 @@ function parseDateRange(dateStr: string): {
     };
   }
 
+  // Specific day of week: "domingo", "lunes", "martes", etc.
+  const dayNames: Record<string, number> = {
+    "domingo": 0, "sunday": 0,
+    "lunes": 1, "monday": 1,
+    "martes": 2, "tuesday": 2,
+    "miercoles": 3, "miércoles": 3, "wednesday": 3,
+    "jueves": 4, "thursday": 4,
+    "viernes": 5, "friday": 5,
+    "sabado": 6, "sábado": 6, "saturday": 6,
+  };
+  const matchedDay = dayNames[lower];
+  if (matchedDay !== undefined) {
+    const currentDay = sma.getUTCDay();
+    let daysAhead = (matchedDay - currentDay + 7) % 7;
+    if (daysAhead === 0) daysAhead = 0; // same day = today
+    const targetDay = new Date(today.getTime() + daysAhead * 24 * 60 * 60 * 1000);
+    return {
+      dateFrom: targetDay,
+      dateTo: new Date(targetDay.getTime() + 24 * 60 * 60 * 1000),
+    };
+  }
+
   if (
     lower.includes("fin de semana") ||
     lower.includes("finde") ||
