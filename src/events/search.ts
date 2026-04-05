@@ -218,6 +218,17 @@ const GENERIC_PATTERNS = [
   /^donde ir/i,
   /^recomien/i,
   /^algo para/i,
+  /^que evento/i,
+  /^que ventos/i,
+  /^eventos/i,
+  /^show me/i,
+  /^what.*(happening|going on|event|do)/i,
+  /^que tiene/i,
+  /^que opciones/i,
+  /^que planes/i,
+  /^dime que/i,
+  /^muestrame/i,
+  /^dame/i,
 ];
 
 function isGenericQuery(query: string): boolean {
