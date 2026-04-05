@@ -467,15 +467,24 @@ async function sendStructuredEventCards(
     userPhone: userPhone?.slice(-4),
   }, "Sending event cards");
 
-  // Send each event: image (if available) then text card — always both
+  // Send each event as a SINGLE message:
+  // - With image: image + truncated text as caption (1 API call, guaranteed in sync)
+  // - Without image: text only
   if (userPhone) {
     for (const card of cardMessages) {
-      // Send image first if available
       if (card.imageUrl) {
-        await sendImageMessage(userPhone, card.imageUrl, card.imageCaption || "");
+        // WhatsApp caption limit: 1024 chars. Truncate text to fit.
+        const caption = card.text.length > 1020
+          ? card.text.substring(0, 1020) + "..."
+          : card.text;
+        const sent = await sendImageMessage(userPhone, card.imageUrl, caption);
+        if (!sent) {
+          // Image failed — send text only as fallback
+          await sendTextMessage(userPhone, card.text);
+        }
+      } else {
+        await sendTextMessage(userPhone, card.text);
       }
-      // Always send the text card with full details
-      await sendTextMessage(userPhone, card.text);
     }
 
     if (!isNextBatch) {
