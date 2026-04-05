@@ -1,5 +1,7 @@
 import { scrapeSource } from "./apify.js";
 import { normalizeApifyPost } from "./normalizer.js";
+import { scrapeInstagramAccount } from "./instagram-scraper.js";
+import { normalizeInstagramPost } from "./instagram-normalizer.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
 import { scrapeEventbrite, scrapeBandsintown } from "./platform-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
@@ -98,21 +100,7 @@ export async function runScrapeAll(trigger = "manual"): Promise<ScrapeResult> {
     "Web scraper phase complete"
   );
 
-  // Phase 2: Apify Facebook scrapers (paid, slower)
-  // Only run if APIFY_API_TOKEN is set and not placeholder
-  if (config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
-    logger.info("Starting Apify scraper phase");
-    const apifyResult = await runApifyScrapers();
-    result.sourcesProcessed += apifyResult.sourcesProcessed;
-    result.eventsInserted += apifyResult.eventsInserted;
-    result.duplicatesSkipped += apifyResult.duplicatesSkipped;
-    result.eventsRejected += apifyResult.eventsRejected;
-    result.errors += apifyResult.errors;
-  } else {
-    logger.info("Skipping Apify phase (no API token)");
-  }
-
-  // Phase 3: Platform scrapers (Eventbrite, Bandsintown - free)
+  // Phase 2: Platform scrapers (Eventbrite, Bandsintown - free)
   logger.info("Starting platform scraper phase");
   const platformEvents = await runPlatformScrapers();
   const { valid: platValidated, rejected: platRejected } = validateAndSanitize(platformEvents);
@@ -133,7 +121,33 @@ export async function runScrapeAll(trigger = "manual"): Promise<ScrapeResult> {
     "Platform scraper phase complete"
   );
 
-  // Phase 4: Cross-source dedup + freshness
+  // Phase 3: Instagram scrapers (Apify, paid)
+  if (config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
+    logger.info("Starting Instagram scraper phase");
+    const igResult = await runInstagramPhase(config.DEFAULT_CITY, result);
+    result.sourcesProcessed += igResult.sourcesProcessed;
+    result.eventsInserted += igResult.eventsInserted;
+    result.duplicatesSkipped += igResult.duplicatesSkipped;
+    result.eventsRejected += igResult.eventsRejected;
+    result.errors += igResult.errors;
+  } else {
+    logger.info("Skipping Instagram phase (no API token)");
+  }
+
+  // Phase 4: Facebook scrapers (Apify, paid)
+  if (config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
+    logger.info("Starting Apify Facebook scraper phase");
+    const apifyResult = await runApifyScrapers();
+    result.sourcesProcessed += apifyResult.sourcesProcessed;
+    result.eventsInserted += apifyResult.eventsInserted;
+    result.duplicatesSkipped += apifyResult.duplicatesSkipped;
+    result.eventsRejected += apifyResult.eventsRejected;
+    result.errors += apifyResult.errors;
+  } else {
+    logger.info("Skipping Facebook phase (no API token)");
+  }
+
+  // Phase 5: Cross-source dedup + freshness
   try {
     const dedupReport = await crossSourceDedup();
     result.duplicatesMerged += dedupReport.eventsMerged;
@@ -271,7 +285,7 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
     "Free scraper phase complete"
   );
 
-  // Step 3: Check if we need Facebook scraping
+  // Step 3: Check if we need paid scraping (Instagram + Facebook)
   // Count events for today
   const todayStart = new Date(Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0));
   const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
@@ -279,8 +293,18 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
 
   logger.info({ todayCount }, "Events for today after free scrape");
 
-  // Only scrape Facebook if fewer than 5 events for today
+  // Only scrape Instagram + Facebook if fewer than 5 events for today
   if (todayCount < 5 && config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
+    // Instagram phase
+    logger.info("Smart scrape: running Instagram scrapers (need more events)");
+    const igResult = await runInstagramPhase(config.DEFAULT_CITY, result);
+    result.sourcesProcessed += igResult.sourcesProcessed;
+    result.eventsInserted += igResult.eventsInserted;
+    result.duplicatesSkipped += igResult.duplicatesSkipped;
+    result.eventsRejected += igResult.eventsRejected;
+    result.errors += igResult.errors;
+
+    // Facebook phase
     logger.info("Smart scrape: running Facebook scrapers with quality filter (need more events)");
     const apifyResult = await runApifyScrapers({
       useQualityFilter: true,
@@ -294,7 +318,7 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
   } else {
     logger.info(
       { todayCount, hasApify: !!config.APIFY_API_TOKEN },
-      "Smart scrape: skipping Facebook (enough events or no API token)"
+      "Smart scrape: skipping Instagram + Facebook (enough events or no API token)"
     );
   }
 
@@ -331,9 +355,144 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
 }
 
 /**
- * Maximum images to analyze per Facebook page per scrape (cost control).
+ * Maximum images to analyze per page per scrape (cost control).
  */
 const MAX_IMAGES_PER_PAGE = 3;
+
+/**
+ * Scrape Instagram accounts via Apify with image-first pipeline.
+ *
+ * For each account:
+ * 1. Scrape posts via Apify
+ * 2. Normalize posts into events
+ * 3. Run Claude Vision on top 3 image posts (IG posts always have images)
+ * 4. Validate, dedup, and insert events
+ * 5. Track source quality
+ */
+async function runInstagramPhase(
+  city: string,
+  _parentResult: ScrapeResult
+): Promise<ScrapeResult> {
+  const logger = getLogger();
+
+  const result: ScrapeResult = {
+    sourcesProcessed: 0,
+    eventsInserted: 0,
+    duplicatesSkipped: 0,
+    eventsRejected: 0,
+    duplicatesMerged: 0,
+    errors: 0,
+  };
+
+  const activeSources = await getActiveSources();
+  const igSources = activeSources.filter(
+    (s) => s.type === "instagram" && s.url.includes("instagram.com")
+  );
+
+  if (igSources.length === 0) {
+    logger.info("No active Instagram sources found");
+    return result;
+  }
+
+  for (const source of igSources) {
+    try {
+      const rawPosts = await scrapeInstagramAccount(source.url);
+
+      const events: NewEvent[] = [];
+      let imagesAnalyzed = 0;
+      let eventsFromImages = 0;
+      let eventsFromText = 0;
+
+      // Normalize all posts
+      const normalized = rawPosts
+        .map((post) => normalizeInstagramPost(post, source.name, city))
+        .filter((e): e is NewEvent => e !== null);
+
+      // Image-first pipeline: analyze top MAX_IMAGES_PER_PAGE posts with Vision
+      for (const event of normalized.slice(0, MAX_IMAGES_PER_PAGE)) {
+        if (event.imageUrl) {
+          try {
+            const imageData = await analyzeEventImage(event.imageUrl);
+            imagesAnalyzed++;
+
+            if (imageData && imageData.hasEventInfo) {
+              enrichEventWithImageData(event, imageData);
+              event.confidence = 0.9;
+              eventsFromImages++;
+              events.push(event);
+              logger.debug(
+                { title: event.title, date: event.eventDate },
+                "Instagram event extracted from image (Vision)"
+              );
+              continue;
+            }
+          } catch {
+            // Fall through to text extraction
+          }
+        }
+
+        // Image didn't yield event info -- try text extraction
+        const textEvent = await enrichWithTextExtraction(event, logger);
+        if (textEvent) {
+          textEvent.confidence = 0.6;
+          eventsFromText++;
+          events.push(textEvent);
+        }
+      }
+
+      // Remaining posts beyond MAX_IMAGES_PER_PAGE: text-only
+      for (const event of normalized.slice(MAX_IMAGES_PER_PAGE)) {
+        const textEvent = await enrichWithTextExtraction(event, logger);
+        if (textEvent) {
+          textEvent.confidence = 0.6;
+          eventsFromText++;
+          events.push(textEvent);
+        }
+      }
+
+      // Validate and dedup
+      const { valid: validated, rejected } = validateAndSanitize(events);
+      result.eventsRejected += rejected;
+
+      const { unique, duplicates } = await deduplicateEvents(validated);
+
+      for (const event of unique) {
+        await upsertEvent({ ...event, scrapedAt: new Date() });
+      }
+
+      await recordScrapeSuccess(source.id);
+      await updateSourceQuality(source.id, unique.length, eventsFromImages);
+
+      result.sourcesProcessed++;
+      result.eventsInserted += unique.length;
+      result.duplicatesSkipped += duplicates;
+
+      logger.info(
+        {
+          source: source.name,
+          totalPosts: rawPosts.length,
+          imagesAnalyzed,
+          eventsFromImages,
+          eventsFromText,
+          inserted: unique.length,
+          duplicates,
+        },
+        "Instagram source scraped (image-first)"
+      );
+    } catch (error) {
+      result.errors++;
+      await recordScrapeFailure(source.id);
+      logger.error({ error, source: source.name }, "Instagram scrape failed");
+    }
+  }
+
+  logger.info(
+    { sources: igSources.length, inserted: result.eventsInserted, errors: result.errors },
+    "Instagram scraper phase complete"
+  );
+
+  return result;
+}
 
 export interface ApifyScrapeOptions {
   /** If true, filter sources by quality score and skip low-quality ones */
