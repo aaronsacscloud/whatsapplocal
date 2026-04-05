@@ -4,6 +4,7 @@ import { hashPhone } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { getShareSuggestion } from "./invite.js";
 import { getTodayEventsText } from "./onboarding.js";
+import { saveMessage } from "../conversations/repository.js";
 
 type OnboardingStep = "name_question" | "interests_question";
 
@@ -120,6 +121,11 @@ async function sendInterestsQuestion(from: string, name: string): Promise<void> 
   ];
 
   await sendInteractiveList(from, body, "Ver opciones", sections);
+
+  // Save the full greeting + interests question to conversation history
+  // so the router can detect the interests step on the next message
+  const phoneHash = hashPhone(from);
+  await saveMessage(phoneHash, "assistant", `${greeting}\n\n${body}\n\n1. Musica en vivo\n2. Gastronomia\n3. Arte y cultura\n4. Vida nocturna\n5. Bienestar\n6. Tours y aventura\n7. Vino y mezcal\n8. De todo un poco`, "onboarding");
 }
 
 /**

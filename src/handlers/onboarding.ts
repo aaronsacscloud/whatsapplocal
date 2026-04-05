@@ -4,6 +4,7 @@ import { hashPhone } from "../utils/hash.js";
 import { searchEvents } from "../events/repository.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
+import { saveMessage } from "../conversations/repository.js";
 
 /**
  * Get today's date range in SMA timezone (UTC-6).
@@ -128,11 +129,13 @@ export async function handleOnboarding(
       ? `Hola ${name}! Aqui tienes lo mejor de hoy:`
       : `Hola de nuevo! Aqui tienes lo mejor de hoy:`;
 
-    const message = `${greeting}\n\n${eventsText}\n\nPreguntame mas sobre cualquiera de estos, o lo que necesites!`;
-    await sendTextMessage(from, message);
+    const msg = `${greeting}\n\n${eventsText}\n\nPreguntame mas sobre cualquiera de estos, o lo que necesites!`;
+    await sendTextMessage(from, msg);
+    await saveMessage(phoneHash, "assistant", msg, "onboarding");
   } else {
     // New user — Step 1: ask for name
-    const message = `Hola! Soy tu guia local de San Miguel de Allende. Como te llamas?`;
-    await sendTextMessage(from, message);
+    const msg = `Hola! Soy tu guia local de San Miguel de Allende. Como te llamas?`;
+    await sendTextMessage(from, msg);
+    await saveMessage(phoneHash, "assistant", msg, "onboarding");
   }
 }
