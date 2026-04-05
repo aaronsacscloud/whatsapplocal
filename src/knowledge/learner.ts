@@ -312,29 +312,36 @@ async function googleFallbackSearch(query: string): Promise<SearchResult[]> {
   }
 }
 
-// DuckDuckGo as final fallback (no API key needed, limited)
+// DuckDuckGo HTML version — reliable, no API key needed
 async function duckDuckGoSearch(query: string): Promise<SearchResult[]> {
   try {
-    const params = new URLSearchParams({ q: query, format: "json", no_html: "1" });
-    const response = await fetch(`https://api.duckduckgo.com/?${params}`, {
-      signal: AbortSignal.timeout(5000),
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!response.ok) return [];
 
-    const data = (await response.json()) as any;
+    const html = await response.text();
     const results: SearchResult[] = [];
 
-    // Abstract (main result)
-    if (data.Abstract && data.AbstractURL) {
-      results.push({ title: data.Heading || query, snippet: data.Abstract, url: data.AbstractURL });
-    }
-
-    // Related topics
-    for (const topic of (data.RelatedTopics || []).slice(0, 4)) {
-      if (topic.Text && topic.FirstURL) {
-        results.push({ title: topic.Text.substring(0, 60), snippet: topic.Text, url: topic.FirstURL });
+    // Parse DDG HTML results: <a class="result__a"> + <a class="result__snippet">
+    const pattern = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = pattern.exec(html)) !== null && results.length < 5) {
+      // Extract real URL from DDG redirect
+      let resultUrl = match[1];
+      const uddgMatch = resultUrl.match(/uddg=([^&]+)/);
+      if (uddgMatch) {
+        resultUrl = decodeURIComponent(uddgMatch[1]);
       }
+
+      results.push({
+        title: match[2].replace(/<[^>]+>/g, "").trim(),
+        snippet: match[3].replace(/<[^>]+>/g, "").trim(),
+        url: resultUrl,
+      });
     }
 
     return results;
