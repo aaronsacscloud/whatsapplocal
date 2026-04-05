@@ -74,14 +74,13 @@ export async function handleEventQuery(
     return weeklyMessages[0] || (isEnglish ? "No events found." : "No hay eventos.");
   }
 
-  // Standard event query flow — pass budget filter if detected
-  // The responder now sends structured cards directly (images + cards + summary)
-  // so we only need to send the first card as text if there are no events
-  // (LLM fallback case)
+  // The responder sends event cards directly (images + text).
+  // It returns a summary string for conversation history only.
+  // If no events, it returns the LLM fallback text which we send.
   const response = await generateResponse(body, events, city, conversationHistory, language, from, classification.budget);
 
-  // Send the response text (first event card or LLM fallback)
-  if (response) {
+  // Only send if it's a fallback message (no events found) — event cards are sent by responder
+  if (events.length === 0 && response) {
     await sendTextMessage(from, response);
   }
 

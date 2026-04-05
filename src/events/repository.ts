@@ -189,7 +189,7 @@ function getDaysOfWeekInRange(from: Date, to: Date): number[] {
 
   // Limit to 7 iterations max (a full week covers all days)
   let iterations = 0;
-  while (current <= to && iterations < 7) {
+  while (current < to && iterations < 7) {
     days.add(current.getUTCDay());
     current.setUTCDate(current.getUTCDate() + 1);
     iterations++;

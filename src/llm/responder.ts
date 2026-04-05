@@ -467,35 +467,27 @@ async function sendStructuredEventCards(
     userPhone: userPhone?.slice(-4),
   }, "Sending event cards");
 
-  // Send each event: image with short caption + text card below
+  // Send each event: image (if available) then text card — always both
   if (userPhone) {
-    for (let i = 0; i < cardMessages.length; i++) {
-      const card = cardMessages[i];
-
+    for (const card of cardMessages) {
+      // Send image first if available
       if (card.imageUrl) {
-        // WhatsApp caption limit is 1024 chars — use short caption
-        const shortCaption = card.imageCaption || "";
-        const imageSent = await sendImageMessage(userPhone, card.imageUrl, shortCaption);
-
-        // Always send text card too (has full details, links, calendar)
-        if (i > 0 || !imageSent) {
-          await sendTextMessage(userPhone, card.text);
-        }
-      } else {
-        if (i > 0) {
-          await sendTextMessage(userPhone, card.text);
-        }
+        await sendImageMessage(userPhone, card.imageUrl, card.imageCaption || "");
       }
+      // Always send the text card with full details
+      await sendTextMessage(userPhone, card.text);
     }
 
-    // Track shown events for pagination
-    if (userPhone && !isNextBatch) {
+    if (!isNextBatch) {
       markEventsShown(userPhone, eventsToShow.length);
     }
   }
 
-  // Return the first card as the "response" (for conversation history)
-  return cardMessages[0].text;
+  // Return summary for conversation history (not sent to user, already sent above)
+  const count = cardMessages.length;
+  return isEn
+    ? `Sent ${count} event${count !== 1 ? "s" : ""}.`
+    : `${count} evento${count !== 1 ? "s" : ""} enviado${count !== 1 ? "s" : ""}.`;
 }
 
 /**
