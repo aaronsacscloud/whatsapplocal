@@ -9,6 +9,7 @@ import type { ClassificationResult } from "../llm/classifier.js";
 import { storeRecentEvents } from "./event-context.js";
 import { formatWeeklyCalendar, isWeeklyRequest } from "./weekly-calendar.js";
 import { isCalendarRequest, handleCalendarRequest } from "./calendar-handler.js";
+import { searchKnowledge, learnFromWeb } from "../knowledge/learner.js";
 
 export async function handleEventQuery(
   from: string,
@@ -31,7 +32,26 @@ export async function handleEventQuery(
       : "Invitacion de calendario generada.";
   }
 
-  const events = await searchFromClassification(classification, interests);
+  let events = await searchFromClassification(classification, interests);
+
+  // If no events found, try knowledge cache first, then learn from web
+  if (events.length === 0) {
+    const cached = await searchKnowledge(body, city);
+    if (cached) {
+      logger.info({ query: body.substring(0, 50) }, "Serving from knowledge cache");
+      await sendTextMessage(from, cached);
+      await incrementQueryCount(hashPhone(from));
+      return cached;
+    }
+
+    // No cached knowledge — learn from web in background
+    // Don't block the response, learn async
+    learnFromWeb(body, city, language).then((learned) => {
+      if (learned) {
+        logger.info({ query: body.substring(0, 50) }, "Learned new knowledge (will serve next time)");
+      }
+    }).catch(() => {});
+  }
 
   // Store events in context for calendar/share features
   if (events.length > 0) {

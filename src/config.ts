@@ -11,6 +11,9 @@ const envSchema = z.object({
   KAPSO_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  BRAVE_SEARCH_API_KEY: z.string().optional(),
+  GOOGLE_SEARCH_API_KEY: z.string().optional(),
+  GOOGLE_SEARCH_CX: z.string().optional(),
   PHONE_HASH_SALT: z.string().min(8),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z

@@ -3,6 +3,8 @@ import { sendTextMessage } from "../whatsapp/sender.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getWeatherContext } from "../knowledge/weather.js";
+import { searchKnowledge, learnFromWeb } from "../knowledge/learner.js";
+import { getConfig } from "../config.js";
 import type { ConversationMessage } from "../llm/responder.js";
 
 const LOCAL_INFO_SYSTEM = `Eres un experto local de San Miguel de Allende, Mexico. Conoces la ciudad como la palma de tu mano.
@@ -56,10 +58,22 @@ export async function handleLocalInfo(
   }
 
   const systemPrompt = isEnglish ? LOCAL_INFO_SYSTEM_EN : LOCAL_INFO_SYSTEM;
+  const config = getConfig();
+
+  // Check if we have cached knowledge for this query
+  const cached = await searchKnowledge(body, config.DEFAULT_CITY);
+  if (cached) {
+    logger.info({ query: body.substring(0, 50) }, "Local info from knowledge cache");
+    await sendTextMessage(from, cached);
+    return cached;
+  }
 
   try {
     const contextParts = [knowledge];
     if (weatherContext) contextParts.push(weatherContext);
+
+    // Try to learn from web to enrich future responses (async, non-blocking)
+    learnFromWeb(body, config.DEFAULT_CITY, language).catch(() => {});
 
     // Build messages array: history + current message
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
