@@ -3,6 +3,7 @@ import { RESPONDER_SYSTEM, RESPONDER_SYSTEM_EN } from "./prompts.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getGoogleMapsUrl } from "../utils/maps.js";
+import { generateGoogleCalendarUrl } from "../utils/calendar-links.js";
 import { sendImageMessage, sendTextMessage } from "../whatsapp/sender.js";
 import { storeRecentEvents, markEventsShown, getNextEvents, getRemainingCount } from "../handlers/event-context.js";
 import type { Event } from "../db/schema.js";
@@ -143,6 +144,14 @@ function formatEventCard(e: any, language: "es" | "en"): string {
       lines.push(getGoogleMapsUrl(venue, addr));
     }
   }
+
+  // 8. GOOGLE CALENDAR LINK
+  const gcalUrl = generateGoogleCalendarUrl(e);
+  lines.push("");
+  lines.push(language === "en"
+    ? `Add to calendar: ${gcalUrl}`
+    : `Agregar al calendario: ${gcalUrl}`
+  );
 
   return lines.join("\n");
 }

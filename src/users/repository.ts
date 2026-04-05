@@ -8,6 +8,7 @@ export interface UserPreferences {
   interests?: string[];
   isTourist?: boolean;
   onboardingComplete?: boolean;
+  name?: string;
 }
 
 export async function upsertUser(
@@ -83,6 +84,9 @@ export async function updatePreferences(
   if (prefs.onboardingComplete !== undefined) {
     updateData.onboardingComplete = prefs.onboardingComplete;
   }
+  if (prefs.name !== undefined) {
+    updateData.name = prefs.name;
+  }
 
   if (Object.keys(updateData).length > 0) {
     await db
@@ -101,6 +105,17 @@ export async function isOnboardingComplete(phoneHash: string): Promise<boolean> 
     .limit(1);
 
   return user?.onboardingComplete ?? false;
+}
+
+export async function getUserName(phoneHash: string): Promise<string | null> {
+  const db = getDb();
+  const [user] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.phoneHash, phoneHash))
+    .limit(1);
+
+  return user?.name ?? null;
 }
 
 export async function getUserLanguage(phoneHash: string): Promise<"es" | "en"> {

@@ -1,6 +1,7 @@
 import { sendTextMessage, sendDocumentMessage } from "../whatsapp/sender.js";
 import { getLogger } from "../utils/logger.js";
 import { generateICS, type CalendarEvent } from "../utils/calendar.js";
+import { generateGoogleCalendarUrl } from "../utils/calendar-links.js";
 import { getRecentEvents } from "./event-context.js";
 
 /**
@@ -71,9 +72,10 @@ export async function handleCalendarRequest(
       logger.warn("Document send failed, sending ICS as text");
     }
 
+    const gcalUrl = generateGoogleCalendarUrl(targetEvent);
     const confirmMsg = isEnglish
-      ? `Added to calendar: *${targetEvent.title}*\n\nIf the file didn't arrive, you can save this event manually.`
-      : `Agregado al calendario: *${targetEvent.title}*\n\nSi no llego el archivo, puedes guardar este evento manualmente.`;
+      ? `Added to calendar: *${targetEvent.title}*\n\nGoogle Calendar: ${gcalUrl}\n\nIf the file didn't arrive, you can use the link above.`
+      : `Agregado al calendario: *${targetEvent.title}*\n\nGoogle Calendar: ${gcalUrl}\n\nSi no llego el archivo, usa el link de arriba.`;
     await sendTextMessage(from, confirmMsg);
   } catch (error) {
     logger.error({ error }, "Calendar handler failed");

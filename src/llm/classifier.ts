@@ -16,6 +16,7 @@ export interface ClassificationResult {
     | "list_favorites"
     | "remove_favorite"
     | "stop_digest"
+    | "plan_request"
     | "unknown";
   city: string | null;
   neighborhood: string | null;

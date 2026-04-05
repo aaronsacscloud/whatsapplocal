@@ -1,5 +1,5 @@
 import { classifyIntent } from "../llm/classifier.js";
-import { upsertUser, updatePreferences, findUserByPhone } from "../users/repository.js";
+import { upsertUser, updatePreferences, findUserByPhone, getUserLanguage } from "../users/repository.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
 import { withRetry } from "../utils/retry.js";
@@ -24,12 +24,14 @@ import {
 } from "../handlers/favorites.js";
 import { handleStopDigest } from "../handlers/digest-opt-out.js";
 import { handleInvite } from "../handlers/invite.js";
+import { handlePlanRequest } from "../handlers/plan-builder.js";
 import { hashPhone } from "../utils/hash.js";
 import {
   saveMessage,
   getRecentMessages,
 } from "../conversations/repository.js";
 import { trackQuery } from "../analytics/tracker.js";
+import { checkRateLimit } from "../users/rate-limiter.js";
 
 export interface IncomingMessage {
   from: string;
@@ -131,11 +133,53 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
       .filter((msg) => msg.role === "assistant")
       .at(-1);
 
+    // Handle name reply early — if the bot asked "como te llamas?", the next
+    // free-text reply IS the name. This must happen before rate limiting and
+    // the LLM classifier to avoid wasting resources on onboarding messages.
+    if (lastBotMessage && lastBotMessage.content.toLowerCase().includes("como te llamas")) {
+      const handled = await handleOnboardingResponse(
+        message.from,
+        message.body,
+        lastBotMessage.content,
+        "es"
+      );
+
+      if (handled) {
+        await saveMessage(phoneHash, "assistant", "[onboarding name]", "onboarding");
+        trackQuery({
+          phoneHash,
+          intent: "onboarding",
+          responseTimeMs: Date.now() - startTime,
+        });
+        return;
+      }
+    }
+
     // Build conversation context for the classifier (helps with follow-ups)
     const classifierContext = history.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
+
+    // Rate limit check — BEFORE the LLM classifier to save costs.
+    // Interactive replies, image, audio, and numbered onboarding replies
+    // are already handled above and won't reach this point.
+    const rateLimit = await checkRateLimit(phoneHash);
+    if (!rateLimit.allowed) {
+      const userLang = await getUserLanguage(phoneHash);
+      const rateLimitMsg =
+        userLang === "en"
+          ? "You've used your 12 queries for today. Upgrade to premium for unlimited queries — just $100 MXN/month."
+          : "Has usado tus 12 consultas de hoy. Pasa a premium por consultas ilimitadas — solo $100 MXN/mes.";
+      await sendTextMessage(message.from, rateLimitMsg);
+      await saveMessage(phoneHash, "assistant", rateLimitMsg, "rate_limited");
+      trackQuery({
+        phoneHash,
+        intent: "rate_limited",
+        responseTimeMs: Date.now() - startTime,
+      });
+      return;
+    }
 
     // Classify intent WITH conversation context
     // This helps understand "dime más", "el primero", "y mañana?" etc.
@@ -300,6 +344,13 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
         botResponse = await withRetry(
           () => handleStopDigest(message.from, language),
           "stop-digest-handler"
+        );
+        break;
+
+      case "plan_request":
+        botResponse = await withRetry(
+          () => handlePlanRequest(message.from, message.body, conversationHistory, language),
+          "plan-builder-handler"
         );
         break;
 

@@ -109,6 +109,7 @@ export const sources = pgTable("sources", {
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
   phoneHash: text("phone_hash").notNull().unique(),
+  name: text("name"),
   city: text("city"),
   neighborhood: text("neighborhood"),
   language: text("language").default("es"),
@@ -120,6 +121,8 @@ export const users = pgTable("users", {
   lastActiveAt: timestamp("last_active_at", { withTimezone: true }).defaultNow(),
   queryCount: integer("query_count").default(0),
   forwardCount: integer("forward_count").default(0),
+  dailyQueryCount: integer("daily_query_count").default(0),
+  dailyQueryResetAt: timestamp("daily_query_reset_at", { withTimezone: true }),
 });
 
 export const processedMessages = pgTable("processed_messages", {

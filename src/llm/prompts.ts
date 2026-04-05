@@ -15,7 +15,7 @@ NO clasifiques como "unknown" mensajes que son claramente respuestas a una conve
 
 Responde SOLO con un JSON valido con la siguiente estructura:
 {
-  "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "invite" | "set_alert" | "save_favorite" | "list_favorites" | "remove_favorite" | "stop_digest" | "unknown",
+  "intent": "event_query" | "venue_query" | "local_info" | "forward_content" | "onboarding" | "feedback" | "invite" | "set_alert" | "save_favorite" | "list_favorites" | "remove_favorite" | "stop_digest" | "plan_request" | "unknown",
   "city": string | null,
   "neighborhood": string | null,
   "date": string | null,
@@ -38,6 +38,7 @@ Intenciones:
 - list_favorites: usuario quiere ver sus favoritos. Ej: "mis favoritos", "my favorites", "mis eventos guardados", "my saved events"
 - remove_favorite: usuario quiere quitar un favorito. Ej: "quitar favorito", "remove favorite", "eliminar guardado"
 - stop_digest: usuario quiere dejar de recibir el resumen diario. Ej: "no mas digests", "no more digests", "para el resumen", "stop daily summary", "no quiero el resumen diario"
+- plan_request: cuando el usuario quiere planear una salida o actividad. Ej: "planea mi sabado", "plan my evening", "arma un plan para 4", "que puedo hacer esta noche con amigos", "planea una cena romantica", "build me a plan", "plan builder"
 - unknown: cualquier otra cosa
 
 Para "budget": Detecta si el usuario menciona preferencia de precio.
