@@ -2,6 +2,7 @@ import { scrapeSource } from "./apify.js";
 import { normalizeApifyPost } from "./normalizer.js";
 import { scrapeInstagramAccount } from "./instagram-scraper.js";
 import { normalizeInstagramPost } from "./instagram-normalizer.js";
+import { scrapeTikTokProfile, normalizeTikTokPost } from "./tiktok-scraper.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
 import { scrapeEventbrite, scrapeBandsintown } from "./platform-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
@@ -147,7 +148,18 @@ export async function runScrapeAll(trigger = "manual"): Promise<ScrapeResult> {
     logger.info("Skipping Facebook phase (no API token)");
   }
 
-  // Phase 5: Cross-source dedup + freshness
+  // Phase 5: TikTok scrapers (Apify, paid, low priority)
+  if (config.APIFY_API_TOKEN && config.APIFY_API_TOKEN !== "placeholder") {
+    logger.info("Starting TikTok scraper phase");
+    const tiktokResult = await runTikTokPhase(config.DEFAULT_CITY);
+    result.sourcesProcessed += tiktokResult.sourcesProcessed;
+    result.eventsInserted += tiktokResult.eventsInserted;
+    result.duplicatesSkipped += tiktokResult.duplicatesSkipped;
+    result.eventsRejected += tiktokResult.eventsRejected;
+    result.errors += tiktokResult.errors;
+  }
+
+  // Phase 6: Cross-source dedup + freshness
   try {
     const dedupReport = await crossSourceDedup();
     result.duplicatesMerged += dedupReport.eventsMerged;
@@ -491,6 +503,56 @@ async function runInstagramPhase(
     "Instagram scraper phase complete"
   );
 
+  return result;
+}
+
+/**
+ * TikTok scraping phase — low priority, supplementary data.
+ */
+async function runTikTokPhase(city: string): Promise<ScrapeResult> {
+  const logger = getLogger();
+  const result: ScrapeResult = {
+    sourcesProcessed: 0, eventsInserted: 0, duplicatesSkipped: 0,
+    eventsRejected: 0, duplicatesMerged: 0, errors: 0,
+  };
+
+  const activeSources = await getActiveSources();
+  const tiktokSources = activeSources.filter((s) => s.type === "tiktok");
+
+  if (tiktokSources.length === 0) {
+    logger.info("No active TikTok sources found");
+    return result;
+  }
+
+  for (const source of tiktokSources) {
+    try {
+      const posts = await scrapeTikTokProfile(source.url, 10);
+      const events = posts
+        .map((p) => normalizeTikTokPost(p, source.name, city))
+        .filter((e): e is NewEvent => e !== null);
+
+      const { valid, rejected } = validateAndSanitize(events);
+      result.eventsRejected += rejected;
+      const { unique, duplicates } = await deduplicateEvents(valid);
+
+      for (const event of unique) {
+        await upsertEvent({ ...event, scrapedAt: new Date() });
+      }
+
+      await recordScrapeSuccess(source.id);
+      result.sourcesProcessed++;
+      result.eventsInserted += unique.length;
+      result.duplicatesSkipped += duplicates;
+
+      logger.info({ source: source.name, posts: posts.length, inserted: unique.length }, "TikTok source scraped");
+    } catch (error) {
+      result.errors++;
+      await recordScrapeFailure(source.id);
+      logger.error({ error, source: source.name }, "TikTok scrape failed");
+    }
+  }
+
+  logger.info({ sources: tiktokSources.length, inserted: result.eventsInserted }, "TikTok phase complete");
   return result;
 }
 
