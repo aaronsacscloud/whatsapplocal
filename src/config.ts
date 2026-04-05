@@ -9,6 +9,8 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1),
   APIFY_API_TOKEN: z.string().min(1),
   KAPSO_API_KEY: z.string().optional(),
+  GROQ_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   PHONE_HASH_SALT: z.string().min(8),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z

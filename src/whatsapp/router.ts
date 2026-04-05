@@ -80,22 +80,26 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
       return;
     }
 
-    // Handle audio/voice messages — route directly to voice handler
+    // Handle audio/voice messages — transcribe and process as text
     if (message.type === "audio" && message.mediaId) {
-      await saveMessage(phoneHash, "user", "[audio]");
-
-      await withRetry(
+      const transcribed = await withRetry(
         () => handleVoice(message.from, message.mediaId!),
         "voice-handler"
       );
 
-      await saveMessage(phoneHash, "assistant", "[voice fallback sent]", "voice");
-      trackQuery({
-        phoneHash,
-        intent: "voice",
-        responseTimeMs: Date.now() - startTime,
-      });
-      return;
+      if (!transcribed) {
+        // Transcription failed — fallback already sent by handler
+        await saveMessage(phoneHash, "user", "[audio - no transcription]");
+        trackQuery({ phoneHash, intent: "voice", responseTimeMs: Date.now() - startTime });
+        return;
+      }
+
+      // Replace message body with transcribed text and continue normal flow
+      logger.info({ from: message.from.slice(-4), transcribed: transcribed.substring(0, 80) }, "Voice → text");
+      message.body = transcribed;
+      message.type = "text";
+      await saveMessage(phoneHash, "user", `[audio] ${transcribed}`);
+      // Fall through to normal text processing below
     }
 
     // Handle interactive message replies (button taps, list selections)

@@ -1,23 +1,45 @@
 import { sendTextMessage } from "../whatsapp/sender.js";
+import { downloadWhatsAppMedia } from "../whatsapp/media.js";
+import { transcribeAudio } from "../llm/transcriber.js";
 import { getLogger } from "../utils/logger.js";
-
-const VOICE_FALLBACK_MESSAGE =
-  "Por ahora solo proceso mensajes de texto e imágenes. ¿Puedes escribir tu pregunta? Así te puedo ayudar mejor.";
 
 /**
  * Handle incoming voice/audio messages.
+ * Downloads the audio, transcribes it via Whisper (Groq or OpenAI),
+ * and returns the transcribed text so the router can process it as a normal message.
  *
- * MVP: Sends a polite fallback asking the user to type their message.
- * Future: Could integrate speech-to-text transcription (Whisper, etc.)
- * and then route the transcribed text through the normal message flow.
+ * Returns the transcribed text, or null if transcription failed.
  */
 export async function handleVoice(
   from: string,
-  _mediaId: string
-): Promise<void> {
+  mediaId: string
+): Promise<string | null> {
   const logger = getLogger();
 
-  logger.info({ from: from.slice(-4) }, "Voice message received (unsupported, sending fallback)");
+  try {
+    // Step 1: Download audio from WhatsApp
+    const { buffer, mimeType } = await downloadWhatsAppMedia(mediaId);
+    logger.info({ from: from.slice(-4), bytes: buffer.length, mimeType }, "Voice audio downloaded");
 
-  await sendTextMessage(from, VOICE_FALLBACK_MESSAGE);
+    // Step 2: Transcribe
+    const text = await transcribeAudio(buffer, mimeType);
+
+    if (!text) {
+      await sendTextMessage(
+        from,
+        "No pude entender el audio. Puedes escribir tu pregunta? Asi te ayudo mejor."
+      );
+      return null;
+    }
+
+    logger.info({ from: from.slice(-4), text: text.substring(0, 100) }, "Voice transcribed");
+    return text;
+  } catch (error) {
+    logger.error({ error }, "Voice handler failed");
+    await sendTextMessage(
+      from,
+      "Hubo un problema al procesar tu audio. Puedes escribir tu pregunta?"
+    );
+    return null;
+  }
 }
