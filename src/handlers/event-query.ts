@@ -60,8 +60,8 @@ export async function handleEventQuery(
   // (LLM fallback case)
   const response = await generateResponse(body, events, city, conversationHistory, language, from, classification.budget);
 
-  // If no events were found, the LLM response was returned but not sent yet
-  if (events.length === 0) {
+  // Send the response text (first event card or LLM fallback)
+  if (response) {
     await sendTextMessage(from, response);
   }
 

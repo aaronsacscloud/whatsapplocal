@@ -458,6 +458,12 @@ async function sendStructuredEventCards(
     return isEn ? "No events found." : "No hay eventos.";
   }
 
+  logger.info({
+    totalCards: cardMessages.length,
+    withImages: cardMessages.filter(c => c.imageUrl).length,
+    userPhone: userPhone?.slice(-4),
+  }, "Sending event cards");
+
   // Send each event as image + card to the user
   if (userPhone) {
     for (let i = 0; i < cardMessages.length; i++) {
