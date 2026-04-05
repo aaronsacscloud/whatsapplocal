@@ -6,7 +6,7 @@ import { withRetry } from "../utils/retry.js";
 import { sendTextMessage } from "./sender.js";
 import { PROCESSING_MESSAGE, PROCESSING_MESSAGE_EN } from "../llm/prompts.js";
 import { handleOnboarding } from "../handlers/onboarding.js";
-import { handleOnboardingResponse } from "../handlers/onboarding-response.js";
+import { handleOnboardingResponse, detectOnboardingStep } from "../handlers/onboarding-response.js";
 import { handleInteractiveReply } from "../handlers/interactive-reply.js";
 import { handleEventQuery } from "../handlers/event-query.js";
 import { handleVenueQuery } from "../handlers/venue-query.js";
@@ -133,25 +133,28 @@ export async function routeMessage(message: IncomingMessage): Promise<void> {
       .filter((msg) => msg.role === "assistant")
       .at(-1);
 
-    // Handle name reply early — if the bot asked "como te llamas?", the next
-    // free-text reply IS the name. This must happen before rate limiting and
-    // the LLM classifier to avoid wasting resources on onboarding messages.
-    if (lastBotMessage && lastBotMessage.content.toLowerCase().includes("como te llamas")) {
-      const handled = await handleOnboardingResponse(
-        message.from,
-        message.body,
-        lastBotMessage.content,
-        "es"
-      );
+    // Handle ALL onboarding replies early — detect whether the bot asked for
+    // name OR interests. This must happen before rate limiting and the LLM
+    // classifier to avoid wasting resources and misclassifying onboarding replies.
+    if (lastBotMessage) {
+      const step = detectOnboardingStep(lastBotMessage.content);
 
-      if (handled) {
-        await saveMessage(phoneHash, "assistant", "[onboarding name]", "onboarding");
-        trackQuery({
-          phoneHash,
-          intent: "onboarding",
-          responseTimeMs: Date.now() - startTime,
-        });
-        return;
+      if (step) {
+        const handled = await handleOnboardingResponse(
+          message.from,
+          message.body,
+          lastBotMessage.content,
+          "es"
+        );
+
+        if (handled) {
+          trackQuery({
+            phoneHash,
+            intent: "onboarding",
+            responseTimeMs: Date.now() - startTime,
+          });
+          return;
+        }
       }
     }
 

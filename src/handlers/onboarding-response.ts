@@ -187,22 +187,41 @@ async function handleInterestsResponse(
       interests = [interestFromId];
     }
   } else {
-    // Parse comma-separated or space-separated numbers like "1, 3, 5" or "1 3 5" or "8"
-    const numbers = trimmed
-      .split(/[\s,]+/)
-      .map((s) => s.trim())
-      .filter((s) => /^[1-8]$/.test(s));
+    // Try to match free-text interest names (e.g. "De todo un poco", "musica", "gastronomia")
+    const lower = trimmed.toLowerCase();
+    const TEXT_INTEREST_MAP: Record<string, string> = {
+      "musica": "music", "música": "music", "music": "music", "musica en vivo": "music", "jazz": "music", "conciertos": "music",
+      "gastronomia": "food", "gastronomía": "food", "comida": "food", "food": "food", "restaurantes": "food",
+      "arte": "culture", "cultura": "culture", "culture": "culture", "arte y cultura": "culture", "galerias": "culture",
+      "nightlife": "nightlife", "vida nocturna": "nightlife", "bares": "nightlife", "fiesta": "nightlife", "noche": "nightlife",
+      "bienestar": "wellness", "wellness": "wellness", "yoga": "wellness", "spa": "wellness",
+      "tours": "adventure", "aventura": "adventure", "adventure": "adventure", "tours y aventura": "adventure",
+      "vino": "wine", "mezcal": "wine", "wine": "wine", "vino y mezcal": "wine", "catas": "wine",
+      "todo": "everything", "de todo": "everything", "de todo un poco": "everything", "todas": "everything", "everything": "everything", "todos": "everything",
+    };
 
-    if (numbers.length === 0) {
-      // Not a valid numbered response
-      return false;
-    }
-
-    // Map numbers to interest tags
-    if (numbers.includes("8")) {
-      interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
+    const matchedInterest = TEXT_INTEREST_MAP[lower];
+    if (matchedInterest) {
+      if (matchedInterest === "everything") {
+        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
+      } else {
+        interests = [matchedInterest];
+      }
     } else {
-      interests = [...new Set(numbers.map((n) => INTEREST_MAP[n]).filter(Boolean))];
+      // Parse comma-separated or space-separated numbers like "1, 3, 5" or "1 3 5" or "8"
+      const numbers = trimmed
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter((s) => /^[1-8]$/.test(s));
+
+      if (numbers.length === 0) {
+        // Default to "everything" if we're in the interests step but can't parse
+        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
+      } else if (numbers.includes("8")) {
+        interests = ["music", "food", "culture", "nightlife", "wellness", "adventure", "wine"];
+      } else {
+        interests = [...new Set(numbers.map((n) => INTEREST_MAP[n]).filter(Boolean))];
+      }
     }
   }
 
