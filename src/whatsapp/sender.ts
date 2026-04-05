@@ -45,25 +45,59 @@ export async function sendImageMessage(
   to: string,
   imageUrl: string,
   caption?: string
-): Promise<void> {
+): Promise<boolean> {
   const logger = getLogger();
   const config = getConfig();
 
-  if (!config.KAPSO_API_KEY) {
-    logger.warn("Cannot send image: no Kapso API key");
-    return;
+  // Try Kapso first
+  if (config.KAPSO_API_KEY) {
+    try {
+      const result = await callKapsoMCP("whatsapp_send_media", {
+        conversation_selector: { phone_number: to },
+        message_type: "image",
+        file_url: imageUrl,
+        caption: caption || "",
+      });
+      logger.info({ to: to.slice(-4), url: imageUrl.substring(0, 50) }, "Image sent via Kapso");
+      return true;
+    } catch (error: any) {
+      logger.warn({ error: error?.message?.substring(0, 100), url: imageUrl.substring(0, 60) }, "Kapso image failed, trying direct API");
+    }
   }
 
+  // Fallback: WhatsApp Cloud API directly
   try {
-    await callKapsoMCP("whatsapp_send_media", {
-      conversation_selector: { phone_number: to },
-      message_type: "image",
-      file_url: imageUrl,
-      caption: caption || "",
-    });
-    logger.info({ to: to.slice(-4) }, "Image sent");
-  } catch (error) {
-    logger.warn({ error }, "Image send failed, skipping");
+    const response = await fetch(
+      `https://graph.facebook.com/v21.0/${config.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.WHATSAPP_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to,
+          type: "image",
+          image: {
+            link: imageUrl,
+            caption: caption || "",
+          },
+        }),
+      }
+    );
+
+    if (response.ok) {
+      logger.info({ to: to.slice(-4), url: imageUrl.substring(0, 50) }, "Image sent via direct API");
+      return true;
+    }
+
+    const errorBody = await response.text();
+    logger.error({ status: response.status, error: errorBody.substring(0, 200), url: imageUrl.substring(0, 60) }, "Direct API image send failed");
+    return false;
+  } catch (error: any) {
+    logger.error({ error: error?.message, url: imageUrl.substring(0, 60) }, "All image send methods failed");
+    return false;
   }
 }
 

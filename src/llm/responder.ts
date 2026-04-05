@@ -471,31 +471,25 @@ async function sendStructuredEventCards(
     userPhone: userPhone?.slice(-4),
   }, "Sending event cards");
 
-  // Send each event as image + card to the user
+  // Send each event as image+caption (single message) or text-only
   if (userPhone) {
     for (let i = 0; i < cardMessages.length; i++) {
       const card = cardMessages[i];
 
-      // Send image first (if available) with caption = title
       if (card.imageUrl) {
-        try {
-          logger.info({ imageUrl: card.imageUrl.substring(0, 60), to: userPhone.slice(-4) }, "Sending event image");
-          await sendImageMessage(userPhone, card.imageUrl, card.imageCaption || "");
-        } catch (imgError: any) {
-          logger.error({ error: imgError?.message?.substring(0, 80), imageUrl: card.imageUrl.substring(0, 60) }, "Image send failed");
+        // Send image WITH card text as caption — single message, more reliable
+        const imageSent = await sendImageMessage(userPhone, card.imageUrl, card.text);
+        if (!imageSent && i > 0) {
+          // Image failed, send text-only as fallback
+          await sendTextMessage(userPhone, card.text);
+        } else if (!imageSent && i === 0) {
+          // First card failed image, text will be returned below
         }
       } else {
-        logger.debug({ title: card.imageCaption }, "No image URL for event");
-      }
-
-      // Send the text card
-      try {
-        // First card is returned as the response; additional cards are sent directly
+        // No image — send text only
         if (i > 0) {
           await sendTextMessage(userPhone, card.text);
         }
-      } catch {
-        logger.warn("Failed to send event card message");
       }
     }
 
