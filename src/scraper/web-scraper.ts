@@ -75,14 +75,23 @@ export async function scrapeDiscoverSMA(): Promise<NewEvent[]> {
 function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
   const events: ScrapedRawEvent[] = [];
 
-  // Extract event blocks: each event has a title in h3 and details in ul
-  // Pattern: <h3><a href="...">[Title]</a></h3> ... <li><strong>Venue:</strong> [Venue]</li>
-  const eventPattern =
-    /<h3[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>([^<]+)<\/a>\s*<\/h3>([\s\S]*?)(?=<h3|$)/gi;
+  // sanmiguellive.com structure:
+  //   <div class="...">
+  //     <img src="/storage/events/XXX.webp" alt="EVENT TITLE">  ← image BEFORE h3
+  //     <h3><a href="URL">TITLE</a></h3>
+  //     <ul><li><strong>Venue:</strong> ...</li></ul>
+  //   </div>
+  //
+  // Strategy: find each <img> with alt + event URL, then find the h3 and details after it.
+  // We split by event cards and extract image + title + details from each card.
+
+  // Find all event card blocks: image followed by h3
+  // Match: everything from an event image to the next event image (or end)
+  const cardPattern = /<img[^>]*src="([^"]*storage\/events\/[^"]*)"[^>]*alt="([^"]*)"[^>]*>[\s\S]*?<h3[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>[^<]*<\/a>\s*<\/h3>([\s\S]*?)(?=<img[^>]*storage\/events|$)/gi;
 
   let match;
-  while ((match = eventPattern.exec(html)) !== null) {
-    const [, eventUrl, title, detailsBlock] = match;
+  while ((match = cardPattern.exec(html)) !== null) {
+    const [, imgSrc, imgAlt, eventUrl, detailsBlock] = match;
 
     const venue = extractField(detailsBlock, "Venue");
     const fieldDate = extractField(detailsBlock, "Date");
@@ -93,21 +102,25 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
     const area = extractField(detailsBlock, "Area");
     const performers = extractField(detailsBlock, "Performers");
 
-    // Build the best date+time string we can
+    // Use alt text as title (most reliable), fallback to h3 content
+    const title = imgAlt || "";
+
+    // Build the best date+time string
     let dateStr: string | undefined;
     if (urlDateTime) {
-      // Prefer URL datetime (most reliable)
       const time = urlDateTime.time || htmlTime;
       const isoString = time
-        ? `${urlDateTime.date}T${time}:00-06:00`   // SMA timezone CST
+        ? `${urlDateTime.date}T${time}:00-06:00`
         : `${urlDateTime.date}T00:00:00-06:00`;
       dateStr = isoString;
     } else if (fieldDate) {
       dateStr = fieldDate;
     }
 
-    // Extract image
-    const imgMatch = detailsBlock.match(/<img[^>]*src="([^"]*)"[^>]*>/i);
+    // Image: from the <img> tag of THIS card (matched correctly now)
+    const imageUrl = imgSrc
+      ? (imgSrc.startsWith("http") ? imgSrc : `https://sanmiguellive.com${imgSrc}`)
+      : undefined;
 
     let description = "";
     if (performers) description += `Artistas: ${performers}. `;
@@ -123,9 +136,7 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
       url: eventUrl
         ? (eventUrl.startsWith("http") ? eventUrl : `https://sanmiguellive.com${eventUrl}`)
         : undefined,
-      imageUrl: imgMatch?.[1]
-        ? (imgMatch[1].startsWith("http") ? imgMatch[1] : `https://sanmiguellive.com${imgMatch[1]}`)
-        : undefined,
+      imageUrl,
     });
   }
 
