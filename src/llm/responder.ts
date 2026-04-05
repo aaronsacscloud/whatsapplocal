@@ -447,15 +447,11 @@ async function sendStructuredEventCards(
   const cardMessages: Array<{ imageUrl?: string; imageCaption?: string; text: string }> = [];
 
   for (const event of translatedEvents) {
-    let imgUrl = (event as any).imageUrl || (event as any).image_url || "";
-    // Validate image URL: must be full URL and at least 5 chars
-    if (imgUrl.length < 10 || !imgUrl.startsWith("http")) {
-      imgUrl = "";
-    }
+    const rawImgUrl = (event as any).imageUrl || (event as any).image_url || "";
     const card = await formatEventCard(event, language);
 
     cardMessages.push({
-      imageUrl: imgUrl || undefined,
+      imageUrl: rawImgUrl && rawImgUrl.startsWith("http") ? rawImgUrl : undefined,
       imageCaption: (event as any).title,
       text: card,
     });

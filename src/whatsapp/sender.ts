@@ -41,16 +41,7 @@ async function callKapsoMCP(
 /**
  * Send an image with optional caption via Kapso MCP
  */
-/**
- * Convert WebP images to JPEG via wsrv.nl proxy.
- * WhatsApp/Kapso doesn't deliver WebP images reliably.
- */
-function ensureJpegUrl(url: string): string {
-  if (url.toLowerCase().endsWith(".webp") || url.toLowerCase().includes(".webp?")) {
-    return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg&w=800&q=85`;
-  }
-  return url;
-}
+import { sanitizeImageUrl } from "../utils/image-sanitizer.js";
 
 export async function sendImageMessage(
   to: string,
@@ -60,8 +51,13 @@ export async function sendImageMessage(
   const logger = getLogger();
   const config = getConfig();
 
-  // Convert WebP to JPEG — WhatsApp doesn't handle WebP via API
-  imageUrl = ensureJpegUrl(imageUrl);
+  // Sanitize image URL — convert WebP to JPEG, validate format
+  const sanitized = sanitizeImageUrl(imageUrl);
+  if (!sanitized) {
+    logger.warn({ url: imageUrl.substring(0, 60) }, "Image URL rejected by sanitizer");
+    return false;
+  }
+  imageUrl = sanitized;
 
   // Try Kapso first
   if (config.KAPSO_API_KEY) {

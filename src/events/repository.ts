@@ -1,14 +1,19 @@
 import { eq, and, gte, lte, ilike, sql, desc } from "drizzle-orm";
 import { getDb } from "../db/index.js";
 import { events, type NewEvent, type Event } from "../db/schema.js";
+import { sanitizeImageForStorage } from "../utils/image-sanitizer.js";
 
 export async function insertEvent(event: NewEvent): Promise<Event> {
   const db = getDb();
+  // Sanitize image URL before storing (WebP → JPEG, validate format)
+  event.imageUrl = sanitizeImageForStorage(event.imageUrl) ?? undefined;
   const [inserted] = await db.insert(events).values(event).returning();
   return inserted;
 }
 
 export async function upsertEvent(event: NewEvent): Promise<Event> {
+  // Sanitize image URL before storing
+  event.imageUrl = sanitizeImageForStorage(event.imageUrl) ?? undefined;
   const db = getDb();
 
   if (event.dedupHash) {
