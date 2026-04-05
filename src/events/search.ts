@@ -62,6 +62,24 @@ export async function searchFromClassification(
     results = await searchEvents(filters);
   }
 
+  // Cascade: if still no events and user didn't specify a date, widen the search
+  if (results.length === 0 && !classification.date) {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const { todayStart } = getSMATodayRange();
+
+    // Try tomorrow
+    filters.dateFrom = new Date(todayStart.getTime() + DAY_MS);
+    filters.dateTo = new Date(todayStart.getTime() + 2 * DAY_MS);
+    results = await searchEvents(filters);
+
+    // Try next 7 days
+    if (results.length === 0) {
+      filters.dateFrom = todayStart;
+      filters.dateTo = new Date(todayStart.getTime() + 7 * DAY_MS);
+      results = await searchEvents(filters);
+    }
+  }
+
   // Boost events matching user interests (put matching categories first)
   if (interests && interests.length > 0 && !classification.category) {
     return boostByInterests(results, interests);
