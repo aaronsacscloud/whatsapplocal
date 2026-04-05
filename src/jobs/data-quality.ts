@@ -54,15 +54,12 @@ export async function runDataQualityCheck(): Promise<QualityReport> {
   };
 
   // ─── Step 1: Count events per day for next 7 days ─────────────────
-  const SMA_TZ = -6;
   const now = new Date();
-  const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
-  const sma = new Date(smaMs);
+  const sma = new Date(now.getTime() - 6 * 3600000);
 
   for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
     const dayStart = new Date(
-      Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate() + dayOffset) -
-        SMA_TZ * 3600000
+      Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate() + dayOffset, 6, 0, 0)
     );
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
@@ -95,8 +92,7 @@ export async function runDataQualityCheck(): Promise<QualityReport> {
 
   // ─── Step 2: Calculate completeness ────────────────────────────────
   const futureStart = new Date(
-    Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) -
-      SMA_TZ * 3600000
+    Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0)
   );
 
   const completenessResult = await db
@@ -141,8 +137,7 @@ export async function runDataQualityCheck(): Promise<QualityReport> {
   // ─── Step 5: Remove events older than yesterday ────────────────────
   try {
     const yesterday = new Date(
-      Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate() - 1) -
-        SMA_TZ * 3600000
+      Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate() - 1, 6, 0, 0)
     );
     report.oldEventsRemoved = await deleteEventsOlderThan(yesterday);
   } catch (error) {

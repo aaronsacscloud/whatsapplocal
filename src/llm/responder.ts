@@ -16,9 +16,8 @@ export interface ConversationMessage {
 const SMA_TZ_OFFSET = -6;
 
 function getSMANow(): Date {
-  const now = new Date();
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  return new Date(utcMs + SMA_TZ_OFFSET * 3600000);
+  const nowUtc = new Date();
+  return new Date(nowUtc.getTime() - 6 * 3600000);
 }
 
 function getSMAToday(): Date {

@@ -3,6 +3,26 @@ import { getConfig } from "../config.js";
 import type { Event } from "../db/schema.js";
 import type { ClassificationResult } from "../llm/classifier.js";
 
+/**
+ * Get current date/time in SMA timezone (America/Mexico_City, UTC-6).
+ * Works correctly regardless of the server's own timezone.
+ */
+function getSMANow(): Date {
+  // Use Intl to get the correct SMA time regardless of server TZ
+  const nowUtc = new Date();
+  const utcMs = nowUtc.getTime();
+  // SMA is always UTC-6 (CST, no daylight saving in Guanajuato)
+  return new Date(utcMs - 6 * 3600000);
+}
+
+function getSMATodayRange(): { todayStart: Date; todayEnd: Date } {
+  const sma = getSMANow();
+  // Start of today in SMA = that date at 00:00 SMA = +6h in UTC
+  const todayStart = new Date(Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0));
+  const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+  return { todayStart, todayEnd };
+}
+
 export async function searchFromClassification(
   classification: ClassificationResult,
   interests?: string[]
@@ -29,14 +49,9 @@ export async function searchFromClassification(
     filters.dateTo = dateTo;
   } else {
     // No date specified: default to TODAY only (strict)
-    // This prevents showing events from other days when user asks "que hay?"
-    const SMA_TZ = -6;
-    const now = new Date();
-    const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
-    const sma = new Date(smaMs);
-    const todaySMA = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ * 3600000);
-    filters.dateFrom = todaySMA;
-    filters.dateTo = new Date(todaySMA.getTime() + 24 * 60 * 60 * 1000);
+    const { todayStart, todayEnd } = getSMATodayRange();
+    filters.dateFrom = todayStart;
+    filters.dateTo = todayEnd;
   }
 
   let results = await searchEvents(filters);
@@ -82,12 +97,9 @@ function parseDateRange(dateStr: string): {
   dateTo: Date;
 } {
   // Use SMA timezone (UTC-6) to determine "today"
-  const SMA_TZ_OFFSET = -6;
-  const now = new Date();
-  const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ_OFFSET * 3600000;
-  const sma = new Date(smaMs);
+  const sma = getSMANow();
   // "today" in SMA = start of day in UTC (SMA midnight = UTC 06:00)
-  const today = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ_OFFSET * 3600000);
+  const today = new Date(Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0));
   const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
   const lower = dateStr.toLowerCase().trim();
@@ -122,7 +134,7 @@ function parseDateRange(dateStr: string): {
     lower.includes("finde") ||
     lower.includes("weekend")
   ) {
-    const dayOfWeek = now.getUTCDay();
+    const dayOfWeek = sma.getUTCDay();
     const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
     const saturday = new Date(today);
     saturday.setUTCDate(today.getUTCDate() + daysUntilSaturday);
@@ -152,9 +164,10 @@ function parseDateRange(dateStr: string): {
   }
 
   // Fallback: next 7 days
+  const fallbackStart = new Date();
   const nextWeek = new Date();
   nextWeek.setDate(nextWeek.getDate() + 7);
-  return { dateFrom: now, dateTo: nextWeek };
+  return { dateFrom: fallbackStart, dateTo: nextWeek };
 }
 
 const GENERIC_PATTERNS = [

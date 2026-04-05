@@ -15,14 +15,11 @@ const SMA_TZ_OFFSET = -6;
 
 function getSMAToday(): { start: Date; end: Date } {
   const now = new Date();
-  const smaMs =
-    now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ_OFFSET * 3600000;
-  const sma = new Date(smaMs);
+  const sma = new Date(now.getTime() - 6 * 3600000);
 
-  // Start of today in SMA timezone, converted back to UTC
+  // Start of today in SMA timezone = that date at 00:00 SMA = 06:00 UTC
   const startUTC = new Date(
-    Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) -
-      SMA_TZ_OFFSET * 3600000
+    Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0)
   );
   // End of today in UTC
   const endUTC = new Date(startUTC.getTime() + 24 * 60 * 60 * 1000);

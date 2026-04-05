@@ -224,11 +224,9 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
   };
 
   // Step 1: Delete events older than yesterday (SMA timezone)
-  const SMA_TZ = -6;
   const now = new Date();
-  const smaMs = now.getTime() + now.getTimezoneOffset() * 60000 + SMA_TZ * 3600000;
-  const sma = new Date(smaMs);
-  const yesterday = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate() - 1) - SMA_TZ * 3600000);
+  const sma = new Date(now.getTime() - 6 * 3600000);
+  const yesterday = new Date(Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate() - 1, 6, 0, 0));
 
   try {
     const deleted = await deleteEventsOlderThan(yesterday);
@@ -275,7 +273,7 @@ export async function runSmartScrape(trigger = "cron"): Promise<ScrapeResult> {
 
   // Step 3: Check if we need Facebook scraping
   // Count events for today
-  const todayStart = new Date(Date.UTC(sma.getFullYear(), sma.getMonth(), sma.getDate()) - SMA_TZ * 3600000);
+  const todayStart = new Date(Date.UTC(sma.getUTCFullYear(), sma.getUTCMonth(), sma.getUTCDate(), 6, 0, 0));
   const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
   const todayCount = await countEventsForDate(config.DEFAULT_CITY, todayStart, todayEnd);
 
