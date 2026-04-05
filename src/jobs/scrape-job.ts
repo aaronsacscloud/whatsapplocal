@@ -1,4 +1,5 @@
 import { runScrapeAll, runSmartScrape } from "../scraper/manager.js";
+import { fillMissingImages } from "../scraper/image-filler.js";
 import { getLogger } from "../utils/logger.js";
 import { updateJobState, shouldRunJob } from "./scheduler.js";
 
@@ -19,6 +20,17 @@ export async function executeScrapeJob(): Promise<void> {
   try {
     await updateJobState(JOB_NAME, "running");
     const result = await runSmartScrape();
+
+    // Fill missing images from event source pages
+    try {
+      const imagesFilled = await fillMissingImages();
+      if (imagesFilled > 0) {
+        logger.info({ imagesFilled }, "Filled missing event images");
+      }
+    } catch (imgError) {
+      logger.warn({ error: imgError }, "Image fill step failed (non-critical)");
+    }
+
     await updateJobState(JOB_NAME, "idle");
 
     logger.info(result, "Scrape job completed");
