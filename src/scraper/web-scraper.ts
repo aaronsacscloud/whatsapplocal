@@ -85,25 +85,31 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
   // Strategy: find each <img> with alt + event URL, then find the h3 and details after it.
   // We split by event cards and extract image + title + details from each card.
 
-  // Find all event card blocks: image followed by h3
-  // Match: everything from an event image to the next event image (or end)
-  const cardPattern = /<img[^>]*src="([^"]*storage\/events\/[^"]*)"[^>]*alt="([^"]*)"[^>]*>[\s\S]*?<h3[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>[^<]*<\/a>\s*<\/h3>([\s\S]*?)(?=<img[^>]*storage\/events|$)/gi;
+  // Match entire event card: from <article> or event image to the next one
+  // The card contains: image → date spans → h3 with title → details list
+  const cardPattern = /<img[^>]*src="([^"]*storage\/events\/[^"]*)"[^>]*alt="([^"]*)"[^>]*>([\s\S]*?)<h3[^>]*>\s*<a[^>]*href="([^"]*)"[^>]*>[^<]*<\/a>\s*<\/h3>([\s\S]*?)(?=<img[^>]*storage\/events|$)/gi;
 
   let match;
   while ((match = cardPattern.exec(html)) !== null) {
-    const [, imgSrc, imgAlt, eventUrl, detailsBlock] = match;
+    const [, imgSrc, imgAlt, midBlock, eventUrl, detailsBlock] = match;
 
     const venue = extractField(detailsBlock, "Venue");
     const fieldDate = extractField(detailsBlock, "Date");
     const urlDateTime = extractDateTimeFromUrl(eventUrl);
-    const htmlTime = extractTimeFromHTML(detailsBlock);
     const category = extractField(detailsBlock, "Event Category");
     const genres = extractField(detailsBlock, "Genres");
     const area = extractField(detailsBlock, "Area");
     const performers = extractField(detailsBlock, "Performers");
 
-    // Use alt text as title (most reliable), fallback to h3 content
+    // Use alt text as title (most reliable)
     const title = imgAlt || "";
+
+    // Extract time from the block between image and h3 (e.g. "10:00 am - 2:00 pm")
+    const fullBlock = midBlock + detailsBlock;
+    const htmlTime = extractTimeFromHTML(fullBlock);
+
+    // Extract date from span pattern: <span>Apr</span><span>05</span>
+    const spanDateStr = extractDateFromSpans(midBlock);
 
     // Build the best date+time string
     let dateStr: string | undefined;
@@ -113,6 +119,10 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
         ? `${urlDateTime.date}T${time}:00-06:00`
         : `${urlDateTime.date}T00:00:00-06:00`;
       dateStr = isoString;
+    } else if (spanDateStr) {
+      // Date from spans (e.g. "Apr 05" → "2026-04-05")
+      const time = htmlTime || "00:00";
+      dateStr = `${spanDateStr}T${time}:00-06:00`;
     } else if (fieldDate) {
       dateStr = fieldDate;
     }
@@ -141,6 +151,31 @@ function parseSanMiguelLiveHTML(html: string): ScrapedRawEvent[] {
   }
 
   return events;
+}
+
+/**
+ * Extract date from HTML spans like: <span>Apr</span><span>05</span>
+ * Returns ISO date string like "2026-04-05" or null.
+ */
+function extractDateFromSpans(block: string): string | null {
+  const months: Record<string, string> = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+
+  // Pattern: <span>Apr</span> ... <span>05</span>
+  const spanPattern = /<span[^>]*>([A-Za-z]{3})<\/span>[\s\S]*?<span[^>]*>(\d{1,2})<\/span>/i;
+  const match = block.match(spanPattern);
+  if (!match) return null;
+
+  const monthStr = match[1].toLowerCase();
+  const day = match[2].padStart(2, "0");
+  const month = months[monthStr];
+  if (!month) return null;
+
+  // Assume current year
+  const year = new Date().getFullYear();
+  return `${year}-${month}-${day}`;
 }
 
 /**
