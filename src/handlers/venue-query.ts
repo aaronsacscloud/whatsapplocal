@@ -1,12 +1,12 @@
 import { searchFromClassification } from "../events/search.js";
 import { generateResponse, type ConversationMessage } from "../llm/responder.js";
-import { sendTextMessage } from "../whatsapp/sender.js";
+import { sendTextMessage, sendImageMessage } from "../whatsapp/sender.js";
 import { incrementQueryCount } from "../users/repository.js";
 import { hashPhone } from "../utils/hash.js";
 import { getConfig } from "../config.js";
 import { getLogger } from "../utils/logger.js";
 import type { ClassificationResult } from "../llm/classifier.js";
-import { searchKnowledge, learnFromWeb } from "../knowledge/learner.js";
+import { searchKnowledge, learnFromWeb, getLastRichResult } from "../knowledge/learner.js";
 
 export async function handleVenueQuery(
   from: string,
@@ -35,7 +35,29 @@ export async function handleVenueQuery(
       const learned = await learnFromWeb(body, city, language);
       if (learned) {
         logger.info({ query: body.substring(0, 50) }, "Venue info from web search");
+
+        // Get rich result with media
+        const rich = getLastRichResult();
+
+        // Send image first if found
+        if (rich?.imageUrl) {
+          await sendImageMessage(from, rich.imageUrl, "");
+        }
+
+        // Send the text
         await sendTextMessage(from, learned);
+
+        // Send video links if found
+        if (rich?.videoLinks && rich.videoLinks.length > 0) {
+          const isEn = language === "en";
+          const videoMsg = rich.videoLinks
+            .map((v) => v)
+            .join("\n");
+          await sendTextMessage(from, isEn
+            ? `Videos and photos:\n${videoMsg}`
+            : `Videos y fotos:\n${videoMsg}`);
+        }
+
         await incrementQueryCount(hashPhone(from));
         return learned;
       }

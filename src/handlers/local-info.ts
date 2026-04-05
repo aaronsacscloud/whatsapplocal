@@ -1,9 +1,9 @@
 import { getLLMClient } from "../llm/client.js";
-import { sendTextMessage } from "../whatsapp/sender.js";
+import { sendTextMessage, sendImageMessage } from "../whatsapp/sender.js";
 import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getWeatherContext } from "../knowledge/weather.js";
-import { searchKnowledge, learnFromWeb } from "../knowledge/learner.js";
+import { searchKnowledge, learnFromWeb, getLastRichResult } from "../knowledge/learner.js";
 import { getConfig } from "../config.js";
 import type { ConversationMessage } from "../llm/responder.js";
 
@@ -81,9 +81,26 @@ export async function handleLocalInfo(
     // Web search failed, continue with knowledge base only
   }
 
-  // If we got good web results, send those directly
+  // If we got good web results, send with media
   if (webKnowledge.length > 50) {
+    const rich = getLastRichResult();
+
+    // Send image first if found
+    if (rich?.imageUrl) {
+      await sendImageMessage(from, rich.imageUrl, "");
+    }
+
     await sendTextMessage(from, webKnowledge);
+
+    // Send video links if found
+    if (rich?.videoLinks && rich.videoLinks.length > 0) {
+      const isEn = language === "en";
+      const videoMsg = rich.videoLinks.join("\n");
+      await sendTextMessage(from, isEn
+        ? `Videos and photos:\n${videoMsg}`
+        : `Videos y fotos:\n${videoMsg}`);
+    }
+
     return webKnowledge;
   }
 

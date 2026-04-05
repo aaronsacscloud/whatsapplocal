@@ -81,6 +81,12 @@ export async function searchKnowledge(
 
 // ─── Learn from web search ───────────────────────────────────────────────
 
+export interface LearnedResult {
+  text: string;
+  imageUrl?: string;
+  videoLinks?: string[];
+}
+
 export async function learnFromWeb(
   userQuery: string,
   city: string,
@@ -220,10 +226,74 @@ Si no hay info util, responde "NO_USEFUL_INFO".`,
     // Step 4: Store in knowledge cache for future queries
     await storeKnowledge(userQuery, answer, searchResults[0]?.url || "web", city);
 
-    logger.info({ query: userQuery, answerLen: answer.length, pages: pageContents.length }, "Learned from web (deep scrape)");
+    logger.info({ query: userQuery, answerLen: answer.length, pages: pageContents.length, videos: videoLinks.length }, "Learned from web (deep scrape)");
+
+    // Build rich result with media
+    const richResult: LearnedResult = { text: answer, videoLinks };
+
+    // Find best image from scraped pages
+    for (const result of searchResults.slice(0, 3)) {
+      const img = await findBestImage(result.url);
+      if (img) {
+        richResult.imageUrl = img;
+        break;
+      }
+    }
+
+    // Store the last rich result for handlers to access
+    _lastRichResult = richResult;
+
     return answer;
   } catch (error) {
     logger.error({ error }, "LLM synthesis failed during learning");
+    return null;
+  }
+}
+
+// Store the last rich result so handlers can access media
+let _lastRichResult: LearnedResult | null = null;
+
+export function getLastRichResult(): LearnedResult | null {
+  const result = _lastRichResult;
+  _lastRichResult = null; // consume once
+  return result;
+}
+
+/**
+ * Find the best image from a web page (for sending with venue info).
+ */
+async function findBestImage(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; WhatsAppLocalBot/1.0)" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+
+    // Priority 1: og:image (social share image, usually the best)
+    const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+    if (ogMatch?.[1] && ogMatch[1].startsWith("http") && ogMatch[1].length > 20) {
+      return ogMatch[1];
+    }
+
+    // Priority 2: First large content image (skip icons, logos)
+    const imgPattern = /<img[^>]*src=["']([^"']+)["'][^>]*/gi;
+    let m;
+    while ((m = imgPattern.exec(html)) !== null) {
+      const src = m[1];
+      if (src.length < 20 || !src.startsWith("http")) continue;
+      const lower = src.toLowerCase();
+      if (lower.includes("logo") || lower.includes("icon") || lower.includes("favicon") ||
+          lower.includes("avatar") || lower.includes("pixel") || lower.endsWith(".svg") ||
+          lower.includes("spinner") || lower.includes("loading")) continue;
+      // Likely a content image
+      return src;
+    }
+
+    return null;
+  } catch {
     return null;
   }
 }
