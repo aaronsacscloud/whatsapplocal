@@ -84,6 +84,7 @@ export async function searchKnowledge(
 export interface LearnedResult {
   text: string;
   imageUrl?: string;
+  extraImages?: string[];   // additional photos (2-3 more)
   videoLinks?: string[];
 }
 
@@ -231,13 +232,12 @@ Si no hay info util, responde "NO_USEFUL_INFO".`,
     // Build rich result with media
     const richResult: LearnedResult = { text: answer, videoLinks };
 
-    // Find best image from scraped pages
-    for (const result of searchResults.slice(0, 3)) {
-      const img = await findBestImage(result.url);
-      if (img) {
-        richResult.imageUrl = img;
-        break;
-      }
+    // Find best 3-4 photos from all scraped pages
+    const pageUrls = searchResults.slice(0, 4).map((r) => r.url);
+    const bestImages = await findBestImages(pageUrls);
+    if (bestImages.length > 0) {
+      richResult.imageUrl = bestImages[0]; // primary image
+      richResult.extraImages = bestImages.slice(1); // additional photos
     }
 
     // Store the last rich result for handlers to access
@@ -260,42 +260,96 @@ export function getLastRichResult(): LearnedResult | null {
 }
 
 /**
- * Find the best image from a web page (for sending with venue info).
+ * Find the best photos from multiple pages for a place.
+ * Extracts 10-15 candidate images, filters out logos/icons,
+ * and returns the top 3-4 that best represent the place.
  */
-async function findBestImage(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; WhatsAppLocalBot/1.0)" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) return null;
-    const html = await response.text();
+async function findBestImages(urls: string[]): Promise<string[]> {
+  const allImages: Array<{ url: string; score: number }> = [];
 
-    // Priority 1: og:image (social share image, usually the best)
-    const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
-      || html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
-    if (ogMatch?.[1] && ogMatch[1].startsWith("http") && ogMatch[1].length > 20) {
-      return ogMatch[1];
+  for (const pageUrl of urls.slice(0, 4)) {
+    try {
+      const response = await fetch(pageUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; WhatsAppLocalBot/1.0)" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) continue;
+      const html = await response.text();
+
+      // Collect og:image (highest priority)
+      const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+        || html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+      if (ogMatch?.[1] && isGoodImage(ogMatch[1])) {
+        allImages.push({ url: ogMatch[1], score: 10 });
+      }
+
+      // Collect all content images
+      const imgPattern = /<img[^>]*src=["']([^"']+)["'][^>]*/gi;
+      let m;
+      while ((m = imgPattern.exec(html)) !== null) {
+        const src = m[1].startsWith("//") ? "https:" + m[1] : m[1];
+        if (!isGoodImage(src)) continue;
+
+        // Score based on attributes
+        const tag = m[0].toLowerCase();
+        let score = 5;
+
+        // Boost: has width/height suggesting large image
+        const widthMatch = tag.match(/width=["']?(\d+)/);
+        if (widthMatch && parseInt(widthMatch[1]) > 300) score += 3;
+
+        // Boost: has descriptive alt text (not empty, not generic)
+        const altMatch = tag.match(/alt=["']([^"']{5,})["']/i);
+        if (altMatch) score += 2;
+
+        // Boost: in a gallery or content area
+        if (tag.includes("gallery") || tag.includes("slider") || tag.includes("hero")) score += 2;
+
+        // Penalize: small dimensions
+        if (widthMatch && parseInt(widthMatch[1]) < 100) score -= 5;
+
+        // Penalize: looks like thumbnail
+        if (src.includes("thumb") || src.includes("-150x") || src.includes("-75x")) score -= 3;
+
+        allImages.push({ url: src, score });
+      }
+    } catch {
+      continue;
     }
-
-    // Priority 2: First large content image (skip icons, logos)
-    const imgPattern = /<img[^>]*src=["']([^"']+)["'][^>]*/gi;
-    let m;
-    while ((m = imgPattern.exec(html)) !== null) {
-      const src = m[1];
-      if (src.length < 20 || !src.startsWith("http")) continue;
-      const lower = src.toLowerCase();
-      if (lower.includes("logo") || lower.includes("icon") || lower.includes("favicon") ||
-          lower.includes("avatar") || lower.includes("pixel") || lower.endsWith(".svg") ||
-          lower.includes("spinner") || lower.includes("loading")) continue;
-      // Likely a content image
-      return src;
-    }
-
-    return null;
-  } catch {
-    return null;
   }
+
+  // Deduplicate by URL
+  const seen = new Set<string>();
+  const unique = allImages.filter((img) => {
+    const key = img.url.substring(0, 100);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Sort by score, take top 4
+  unique.sort((a, b) => b.score - a.score);
+
+  return unique.slice(0, 4).map((img) => img.url);
+}
+
+function isGoodImage(url: string): boolean {
+  if (!url || url.length < 20) return false;
+  if (!url.startsWith("http")) return false;
+  const lower = url.toLowerCase();
+  // Skip logos, icons, tracking pixels, SVGs, tiny images
+  if (lower.includes("logo") || lower.includes("icon") || lower.includes("favicon")) return false;
+  if (lower.includes("avatar") || lower.includes("pixel") || lower.includes("spacer")) return false;
+  if (lower.includes("spinner") || lower.includes("loading") || lower.includes("placeholder")) return false;
+  if (lower.includes("badge") || lower.includes("sprite") || lower.includes("arrow")) return false;
+  if (lower.includes("button") || lower.includes("social") || lower.includes("share")) return false;
+  if (lower.endsWith(".svg") || lower.endsWith(".gif") || lower.endsWith(".ico")) return false;
+  if (lower.includes("1x1") || lower.includes("blank") || lower.includes("transparent")) return false;
+  // Must look like a real photo
+  if (lower.includes(".jpg") || lower.includes(".jpeg") || lower.includes(".png") || lower.includes(".webp")) return true;
+  // Accept URLs without extension if they look like CDN images
+  if (lower.includes("wixstatic") || lower.includes("cloudinary") || lower.includes("imgix") || lower.includes("unsplash")) return true;
+  return true; // accept by default if passed all filters
 }
 
 /**

@@ -85,9 +85,14 @@ export async function handleLocalInfo(
   if (webKnowledge.length > 50) {
     const rich = getLastRichResult();
 
-    // Send image first if found
+    // Send photos (3-4 best images)
     if (rich?.imageUrl) {
       await sendImageMessage(from, rich.imageUrl, "");
+    }
+    if (rich?.extraImages) {
+      for (const img of rich.extraImages) {
+        await sendImageMessage(from, img, "");
+      }
     }
 
     await sendTextMessage(from, webKnowledge);
@@ -97,8 +102,8 @@ export async function handleLocalInfo(
       const isEn = language === "en";
       const videoMsg = rich.videoLinks.join("\n");
       await sendTextMessage(from, isEn
-        ? `Videos and photos:\n${videoMsg}`
-        : `Videos y fotos:\n${videoMsg}`);
+        ? `Check it out:\n${videoMsg}`
+        : `Checa esto:\n${videoMsg}`);
     }
 
     return webKnowledge;

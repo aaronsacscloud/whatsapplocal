@@ -39,23 +39,26 @@ export async function handleVenueQuery(
         // Get rich result with media
         const rich = getLastRichResult();
 
-        // Send image first if found
+        // Send photos (3-4 best images of the place)
         if (rich?.imageUrl) {
           await sendImageMessage(from, rich.imageUrl, "");
         }
+        if (rich?.extraImages) {
+          for (const img of rich.extraImages) {
+            await sendImageMessage(from, img, "");
+          }
+        }
 
-        // Send the text
+        // Send the text description
         await sendTextMessage(from, learned);
 
         // Send video links if found
         if (rich?.videoLinks && rich.videoLinks.length > 0) {
           const isEn = language === "en";
-          const videoMsg = rich.videoLinks
-            .map((v) => v)
-            .join("\n");
+          const videoMsg = rich.videoLinks.join("\n");
           await sendTextMessage(from, isEn
-            ? `Videos and photos:\n${videoMsg}`
-            : `Videos y fotos:\n${videoMsg}`);
+            ? `Check it out:\n${videoMsg}`
+            : `Checa esto:\n${videoMsg}`);
         }
 
         await incrementQueryCount(hashPhone(from));
