@@ -97,26 +97,44 @@ export async function learnFromWeb(
     return null;
   }
 
-  // Step 2: Use LLM to synthesize a helpful answer from search results
+  // Step 2: Scrape top 3 pages for detailed content
+  const pageContents: string[] = [];
+  for (const result of searchResults.slice(0, 3)) {
+    try {
+      const content = await scrapePageContent(result.url);
+      if (content) {
+        pageContents.push(`### ${result.title}\nURL: ${result.url}\n${content}`);
+      }
+    } catch {
+      // Use snippet as fallback
+      pageContents.push(`### ${result.title}\nURL: ${result.url}\n${result.snippet}`);
+    }
+  }
+
+  // Build context: scraped pages + search snippets for the rest
+  const contextParts = [...pageContents];
+  for (const result of searchResults.slice(3, 5)) {
+    contextParts.push(`### ${result.title}\n${result.snippet}\n${result.url}`);
+  }
+
+  const fullContext = contextParts.join("\n\n");
+  if (fullContext.length < 50) return null;
+
+  // Step 3: Use LLM to synthesize a detailed answer
   const client = getLLMClient();
   const isEn = language === "en";
-
-  const resultsText = searchResults
-    .slice(0, 5)
-    .map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`)
-    .join("\n\n");
 
   try {
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 500,
+      max_tokens: 800,
       system: isEn
-        ? `You are a local guide for ${city}. Synthesize a helpful, concise answer from these web search results. Include specific names, addresses, prices, and phone numbers when available. Format for WhatsApp (plain text). If the results don't contain useful info, respond with just "NO_USEFUL_INFO".`
-        : `Eres un guia local de ${city}. Sintetiza una respuesta util y concisa de estos resultados de busqueda. Incluye nombres especificos, direcciones, precios y telefonos cuando esten disponibles. Formatea para WhatsApp (texto plano). Si los resultados no tienen info util, responde solo "NO_USEFUL_INFO".`,
+        ? `You are a local expert for ${city}. Answer the user's question using ONLY the web content provided below. Be specific: include names, addresses, phone numbers, prices, hours, and any concrete details found. Format for WhatsApp (plain text, max 800 chars). If the content doesn't answer the question, respond with "NO_USEFUL_INFO".`
+        : `Eres un experto local de ${city}. Responde la pregunta del usuario usando SOLO el contenido web proporcionado abajo. Se especifico: incluye nombres, direcciones, telefonos, precios, horarios y cualquier detalle concreto. Formatea para WhatsApp (texto plano, max 800 chars). Si el contenido no responde la pregunta, responde "NO_USEFUL_INFO".`,
       messages: [
         {
           role: "user",
-          content: `Pregunta del usuario: "${userQuery}"\n\nResultados de busqueda:\n${resultsText}`,
+          content: `Pregunta: "${userQuery}"\n\nContenido de paginas web:\n${fullContext.substring(0, 8000)}`,
         },
       ],
     });
@@ -127,13 +145,56 @@ export async function learnFromWeb(
       return null;
     }
 
-    // Step 3: Store in knowledge cache
+    // Step 4: Store in knowledge cache for future queries
     await storeKnowledge(userQuery, answer, searchResults[0]?.url || "web", city);
 
-    logger.info({ query: userQuery, answerLen: answer.length }, "Learned new knowledge from web");
+    logger.info({ query: userQuery, answerLen: answer.length, pages: pageContents.length }, "Learned from web (deep scrape)");
     return answer;
   } catch (error) {
     logger.error({ error }, "LLM synthesis failed during learning");
+    return null;
+  }
+}
+
+/**
+ * Scrape a web page and extract useful text content.
+ * Strips HTML, scripts, styles, and returns clean text (max 3000 chars).
+ */
+async function scrapePageContent(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; WhatsAppLocalBot/1.0)" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+
+    let html = await response.text();
+
+    // Remove scripts, styles, nav, footer
+    html = html.replace(/<script[\s\S]*?<\/script>/gi, "");
+    html = html.replace(/<style[\s\S]*?<\/style>/gi, "");
+    html = html.replace(/<nav[\s\S]*?<\/nav>/gi, "");
+    html = html.replace(/<footer[\s\S]*?<\/footer>/gi, "");
+    html = html.replace(/<header[\s\S]*?<\/header>/gi, "");
+
+    // Extract text from remaining HTML
+    let text = html
+      .replace(/<[^>]+>/g, " ")        // strip tags
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&#?\w+;/g, " ")        // other entities
+      .replace(/\s+/g, " ")            // collapse whitespace
+      .trim();
+
+    // Take the most useful chunk (skip first 200 chars which is usually nav/header text)
+    if (text.length > 200) {
+      text = text.substring(200);
+    }
+
+    return text.substring(0, 3000) || null;
+  } catch {
     return null;
   }
 }

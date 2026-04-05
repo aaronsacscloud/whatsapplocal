@@ -68,12 +68,27 @@ export async function handleLocalInfo(
     return cached;
   }
 
+  // Search web for specific info BEFORE responding (makes the bot actually useful)
+  let webKnowledge = "";
+  try {
+    const learned = await learnFromWeb(body, config.DEFAULT_CITY, language);
+    if (learned) {
+      logger.info({ query: body.substring(0, 50) }, "Learned from web, using in response");
+      webKnowledge = learned;
+    }
+  } catch {
+    // Web search failed, continue with knowledge base only
+  }
+
+  // If we got good web results, send those directly
+  if (webKnowledge.length > 50) {
+    await sendTextMessage(from, webKnowledge);
+    return webKnowledge;
+  }
+
   try {
     const contextParts = [knowledge];
     if (weatherContext) contextParts.push(weatherContext);
-
-    // Try to learn from web to enrich future responses (async, non-blocking)
-    learnFromWeb(body, config.DEFAULT_CITY, language).catch(() => {});
 
     // Build messages array: history + current message
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [];

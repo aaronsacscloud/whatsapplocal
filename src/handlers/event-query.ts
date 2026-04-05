@@ -34,7 +34,7 @@ export async function handleEventQuery(
 
   let events = await searchFromClassification(classification, interests);
 
-  // If no events found, try knowledge cache first, then learn from web
+  // If no events found, try knowledge cache, then search web for an answer
   if (events.length === 0) {
     const cached = await searchKnowledge(body, city);
     if (cached) {
@@ -44,13 +44,18 @@ export async function handleEventQuery(
       return cached;
     }
 
-    // No cached knowledge — learn from web in background
-    // Don't block the response, learn async
-    learnFromWeb(body, city, language).then((learned) => {
+    // Search web and respond with what we find (blocking — user gets a real answer)
+    try {
+      const learned = await learnFromWeb(body, city, language);
       if (learned) {
-        logger.info({ query: body.substring(0, 50) }, "Learned new knowledge (will serve next time)");
+        logger.info({ query: body.substring(0, 50) }, "Responding with web-learned knowledge");
+        await sendTextMessage(from, learned);
+        await incrementQueryCount(hashPhone(from));
+        return learned;
       }
-    }).catch(() => {});
+    } catch {
+      // Web search failed, fall through to LLM fallback
+    }
   }
 
   // Store events in context for calendar/share features
