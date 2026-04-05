@@ -29,22 +29,26 @@ export async function checkRateLimit(phoneHash: string): Promise<{
   const now = new Date();
   const smaDayStart = getSmaDayStart(now);
 
-  // For now, all users are "free" tier (no subscriptions table yet)
-  const tier = "free" as const;
-
   const [user] = await db
     .select({
       dailyQueryCount: users.dailyQueryCount,
       dailyQueryResetAt: users.dailyQueryResetAt,
+      isPremium: users.isPremium,
     })
     .from(users)
     .where(eq(users.phoneHash, phoneHash))
     .limit(1);
 
   if (!user) {
-    // User not found — allow (will be created by upsertUser)
-    return { allowed: true, remaining: FREE_TIER_DAILY_LIMIT, tier };
+    return { allowed: true, remaining: FREE_TIER_DAILY_LIMIT, tier: "free" };
   }
+
+  // Premium users have unlimited queries
+  if (user.isPremium) {
+    return { allowed: true, remaining: Infinity, tier: "premium" };
+  }
+
+  const tier = "free" as const;
 
   // Check if we need to reset the daily counter (new SMA day)
   if (!user.dailyQueryResetAt || user.dailyQueryResetAt < smaDayStart) {

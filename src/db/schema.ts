@@ -123,6 +123,7 @@ export const users = pgTable("users", {
   forwardCount: integer("forward_count").default(0),
   dailyQueryCount: integer("daily_query_count").default(0),
   dailyQueryResetAt: timestamp("daily_query_reset_at", { withTimezone: true }),
+  isPremium: boolean("is_premium").default(false),
 });
 
 export const processedMessages = pgTable("processed_messages", {
