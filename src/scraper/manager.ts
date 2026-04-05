@@ -4,6 +4,7 @@ import { scrapeInstagramAccount } from "./instagram-scraper.js";
 import { normalizeInstagramPost } from "./instagram-normalizer.js";
 import { scrapeTikTokProfile, normalizeTikTokPost } from "./tiktok-scraper.js";
 import { scrapeSanMiguelLive, scrapeDiscoverSMA } from "./web-scraper.js";
+import { scrapeVisitSMA } from "./visitsma-scraper.js";
 import { scrapeEventbrite, scrapeBandsintown } from "./platform-scraper.js";
 import { deduplicateEvents } from "./dedup.js";
 import {
@@ -226,6 +227,14 @@ async function runWebScrapers(): Promise<ReturnType<typeof scrapeSanMiguelLive> 
     logger.info({ count: dsmEvents.length }, "discoversma.com scraped");
   } catch (error) {
     logger.error({ error }, "discoversma.com scraper failed");
+  }
+
+  try {
+    const vsmEvents = await scrapeVisitSMA();
+    allEvents.push(...vsmEvents);
+    logger.info({ count: vsmEvents.length }, "visitsanmiguel.travel scraped");
+  } catch (error) {
+    logger.error({ error }, "visitsanmiguel.travel scraper failed");
   }
 
   return allEvents;
