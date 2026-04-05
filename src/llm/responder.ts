@@ -435,8 +435,8 @@ async function sendStructuredEventCards(
     return new Date(dateA).getTime() - new Date(dateB).getTime();
   });
 
-  // Limit to reasonable number for WhatsApp
-  const maxEvents = 8;
+  // Show all events found (up to 15 max for WhatsApp usability)
+  const maxEvents = 15;
   const eventsToShow = sorted.slice(0, maxEvents);
 
   // Enrich poor descriptions and translate to user's language
@@ -471,22 +471,21 @@ async function sendStructuredEventCards(
     userPhone: userPhone?.slice(-4),
   }, "Sending event cards");
 
-  // Send each event as image+caption (single message) or text-only
+  // Send each event: image with short caption + text card below
   if (userPhone) {
     for (let i = 0; i < cardMessages.length; i++) {
       const card = cardMessages[i];
 
       if (card.imageUrl) {
-        // Send image WITH card text as caption — single message, more reliable
-        const imageSent = await sendImageMessage(userPhone, card.imageUrl, card.text);
-        if (!imageSent && i > 0) {
-          // Image failed, send text-only as fallback
+        // WhatsApp caption limit is 1024 chars — use short caption
+        const shortCaption = card.imageCaption || "";
+        const imageSent = await sendImageMessage(userPhone, card.imageUrl, shortCaption);
+
+        // Always send text card too (has full details, links, calendar)
+        if (i > 0 || !imageSent) {
           await sendTextMessage(userPhone, card.text);
-        } else if (!imageSent && i === 0) {
-          // First card failed image, text will be returned below
         }
       } else {
-        // No image — send text only
         if (i > 0) {
           await sendTextMessage(userPhone, card.text);
         }
@@ -496,42 +495,6 @@ async function sendStructuredEventCards(
     // Track shown events for pagination
     if (userPhone && !isNextBatch) {
       markEventsShown(userPhone, eventsToShow.length);
-    } else if (userPhone && isNextBatch) {
-      // getNextEvents already updated the counter
-    }
-
-    // Send summary message at the end
-    const summaryCount = eventsToShow.length;
-    const remaining = userPhone ? getRemainingCount(userPhone) : Math.max(0, events.length - maxEvents);
-
-    let budgetHint = "";
-    if (budget === "free") {
-      budgetHint = isEn ? " (free options)" : " (opciones gratis)";
-    } else if (budget === "low") {
-      budgetHint = isEn ? " (budget-friendly)" : " (opciones economicas)";
-    } else if (budget === "high") {
-      budgetHint = isEn ? " (premium)" : " (premium)";
-    }
-
-    let summary: string;
-    if (isEn) {
-      summary = `Those are ${summaryCount} event${summaryCount !== 1 ? "s" : ""}${budgetHint}.`;
-      if (remaining > 0) {
-        summary += ` There are ${remaining} more — ask me to see them!`;
-      }
-      summary += ` Want more details on any?`;
-    } else {
-      summary = `Esos son ${summaryCount} evento${summaryCount !== 1 ? "s" : ""}${budgetHint}.`;
-      if (remaining > 0) {
-        summary += ` Hay ${remaining} mas — pideme verlos!`;
-      }
-      summary += ` Quieres mas detalles de alguno?`;
-    }
-
-    try {
-      await sendTextMessage(userPhone, summary);
-    } catch {
-      logger.warn("Failed to send summary message");
     }
   }
 
