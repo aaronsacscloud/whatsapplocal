@@ -146,29 +146,67 @@ export async function learnFromWeb(
   const fullContext = contextParts.join("\n\n");
   if (fullContext.length < 50) return null;
 
-  // Step 3: Use LLM to synthesize answer WITH review summary
+  // Step 2.7: Search for TikTok/Instagram videos
+  const videoQuery = `${cleanedQuery} ${city} site:tiktok.com OR site:instagram.com`;
+  const videoResults = await webSearch(videoQuery);
+  const videoLinks: string[] = [];
+  for (const vr of (videoResults || []).slice(0, 3)) {
+    if (vr.url.includes("tiktok.com") || vr.url.includes("instagram.com")) {
+      videoLinks.push(vr.url);
+    }
+  }
+
+  // Add video links to context
+  if (videoLinks.length > 0) {
+    contextParts.push(`### VIDEOS Y REDES SOCIALES:\n${videoLinks.join("\n")}`);
+  }
+
+  // Rebuild full context with everything
+  const fullContextWithVideos = contextParts.join("\n\n");
+
+  // Step 3: Use LLM to synthesize as a LOCAL GUIDE (conversational, personal)
   const client = getLLMClient();
   const isEn = language === "en";
 
   try {
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 1000,
+      max_tokens: 1200,
       system: isEn
-        ? `You are a local expert for ${city}. Answer the user's question using the web content below. Include:
-1. Basic info: name, address, phone, hours, prices
-2. What it offers: what you can find/do there
-3. Visitor reviews summary: overall rating, what people love, what they complain about, standout comments
-Format for WhatsApp (plain text). Use short paragraphs. If no useful info found, respond "NO_USEFUL_INFO".`
-        : `Eres un experto local de ${city}. Responde la pregunta usando el contenido web abajo. Incluye:
-1. Info basica: nombre, direccion, telefono, horario, precios
-2. Que ofrece: que puedes encontrar/hacer ahi
-3. Resumen de opiniones: calificacion general, que les encanta a los visitantes, quejas comunes, comentarios destacados
-Formatea para WhatsApp (texto plano). Usa parrafos cortos. Si no hay info util, responde "NO_USEFUL_INFO".`,
+        ? `You are a friendly local guide in ${city} talking to a friend on WhatsApp. Give a warm, personal recommendation based on the web info below. Talk like a real person, not a bot.
+
+Include naturally in your message:
+- What the place IS and why it's special (your personal take)
+- How to get there (address, landmark references)
+- When to go (hours if available, best time to visit)
+- What to expect price-wise
+- What visitors say (summarize reviews in 1-2 sentences, be honest about good AND bad)
+- If you found TikTok/Instagram links, include them: "Check out videos here: [link]"
+- End with a personal tip or "pro tip" as a local
+
+Keep it conversational. No bullet points. No headers. No emojis overload (max 2-3).
+Write like you're texting a friend who just asked you about this place.
+If info is not available, just skip it naturally, don't say "not available".
+If no useful info at all, respond "NO_USEFUL_INFO".`
+        : `Eres un guia local amigable de ${city} hablando con un amigo por WhatsApp. Da una recomendacion calida y personal basada en la info web abajo. Habla como persona real, no como bot.
+
+Incluye naturalmente en tu mensaje:
+- Que ES el lugar y por que es especial (tu opinion personal)
+- Como llegar (direccion, referencias de puntos conocidos)
+- Cuando ir (horario si hay, mejor momento para visitar)
+- Que esperar de precios
+- Que dicen los visitantes (resume opiniones en 1-2 frases, se honesto con lo bueno Y lo malo)
+- Si encontraste links de TikTok/Instagram, incluyelos: "Checa videos aqui: [link]"
+- Termina con un tip personal o "tip de local"
+
+Mantenlo conversacional. Sin bullet points. Sin encabezados con #. Maximo 2-3 emojis.
+Escribe como si le estuvieras mandando un mensaje a un amigo que te pregunto por este lugar.
+Si algun dato no esta disponible, simplemente no lo menciones, no digas "no disponible".
+Si no hay info util, responde "NO_USEFUL_INFO".`,
       messages: [
         {
           role: "user",
-          content: `Pregunta: "${userQuery}"\n\nContenido de paginas web y reseñas:\n${fullContext.substring(0, 10000)}`,
+          content: `Pregunta: "${userQuery}"\n\nContenido de paginas web, reseñas y videos:\n${fullContextWithVideos.substring(0, 10000)}`,
         },
       ],
     });
