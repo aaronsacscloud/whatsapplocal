@@ -36,6 +36,9 @@ export function sanitizeImageUrl(url: string | null | undefined): string | null 
   // Block SVGs (not supported as WhatsApp images)
   if (lower.endsWith(".svg")) return null;
 
+  // Already proxied — don't double-encode
+  if (lower.includes("wsrv.nl")) return cleaned;
+
   // Convert WebP to JPEG via proxy
   if (lower.endsWith(".webp") || lower.includes(".webp?") || lower.includes(".webp&")) {
     cleaned = `https://wsrv.nl/?url=${encodeURIComponent(cleaned)}&output=jpg&w=800&q=85`;
