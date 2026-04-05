@@ -106,13 +106,32 @@ export async function learnFromWeb(
         pageContents.push(`### ${result.title}\nURL: ${result.url}\n${content}`);
       }
     } catch {
-      // Use snippet as fallback
       pageContents.push(`### ${result.title}\nURL: ${result.url}\n${result.snippet}`);
     }
   }
 
-  // Build context: scraped pages + search snippets for the rest
-  const contextParts = [...pageContents];
+  // Step 2.5: Search for reviews/opinions specifically
+  const reviewQuery = `${userQuery} opiniones reseñas`;
+  const reviewResults = await webSearch(reviewQuery);
+  const reviewContents: string[] = [];
+  for (const result of reviewResults.slice(0, 2)) {
+    // Prioritize TripAdvisor, Google, Facebook reviews
+    if (result.url.includes("tripadvisor") || result.url.includes("google.com/maps") || result.url.includes("facebook") || result.url.includes("yelp")) {
+      try {
+        const content = await scrapePageContent(result.url);
+        if (content) {
+          reviewContents.push(`### RESEÑAS: ${result.title}\n${content}`);
+        }
+      } catch {
+        reviewContents.push(`### RESEÑAS: ${result.title}\n${result.snippet}`);
+      }
+    } else {
+      reviewContents.push(`### RESEÑAS: ${result.title}\n${result.snippet}`);
+    }
+  }
+
+  // Build full context: page content + reviews + remaining snippets
+  const contextParts = [...pageContents, ...reviewContents];
   for (const result of searchResults.slice(3, 5)) {
     contextParts.push(`### ${result.title}\n${result.snippet}\n${result.url}`);
   }
@@ -120,21 +139,29 @@ export async function learnFromWeb(
   const fullContext = contextParts.join("\n\n");
   if (fullContext.length < 50) return null;
 
-  // Step 3: Use LLM to synthesize a detailed answer
+  // Step 3: Use LLM to synthesize answer WITH review summary
   const client = getLLMClient();
   const isEn = language === "en";
 
   try {
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      max_tokens: 1000,
       system: isEn
-        ? `You are a local expert for ${city}. Answer the user's question using ONLY the web content provided below. Be specific: include names, addresses, phone numbers, prices, hours, and any concrete details found. Format for WhatsApp (plain text, max 800 chars). If the content doesn't answer the question, respond with "NO_USEFUL_INFO".`
-        : `Eres un experto local de ${city}. Responde la pregunta del usuario usando SOLO el contenido web proporcionado abajo. Se especifico: incluye nombres, direcciones, telefonos, precios, horarios y cualquier detalle concreto. Formatea para WhatsApp (texto plano, max 800 chars). Si el contenido no responde la pregunta, responde "NO_USEFUL_INFO".`,
+        ? `You are a local expert for ${city}. Answer the user's question using the web content below. Include:
+1. Basic info: name, address, phone, hours, prices
+2. What it offers: what you can find/do there
+3. Visitor reviews summary: overall rating, what people love, what they complain about, standout comments
+Format for WhatsApp (plain text). Use short paragraphs. If no useful info found, respond "NO_USEFUL_INFO".`
+        : `Eres un experto local de ${city}. Responde la pregunta usando el contenido web abajo. Incluye:
+1. Info basica: nombre, direccion, telefono, horario, precios
+2. Que ofrece: que puedes encontrar/hacer ahi
+3. Resumen de opiniones: calificacion general, que les encanta a los visitantes, quejas comunes, comentarios destacados
+Formatea para WhatsApp (texto plano). Usa parrafos cortos. Si no hay info util, responde "NO_USEFUL_INFO".`,
       messages: [
         {
           role: "user",
-          content: `Pregunta: "${userQuery}"\n\nContenido de paginas web:\n${fullContext.substring(0, 8000)}`,
+          content: `Pregunta: "${userQuery}"\n\nContenido de paginas web y reseñas:\n${fullContext.substring(0, 10000)}`,
         },
       ],
     });
