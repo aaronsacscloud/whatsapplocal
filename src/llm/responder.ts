@@ -4,6 +4,7 @@ import { getLogger } from "../utils/logger.js";
 import { getLocalKnowledge } from "../knowledge/index.js";
 import { getGoogleMapsUrl } from "../utils/maps.js";
 import { generateGoogleCalendarUrl } from "../utils/calendar-links.js";
+import { shortenUrl } from "../utils/short-url.js";
 import { sendImageMessage, sendTextMessage } from "../whatsapp/sender.js";
 import { storeRecentEvents, markEventsShown, getNextEvents, getRemainingCount } from "../handlers/event-context.js";
 import type { Event } from "../db/schema.js";
@@ -26,7 +27,7 @@ function getSMAToday(): Date {
   return new Date(sma.getFullYear(), sma.getMonth(), sma.getDate());
 }
 
-function formatEventCard(e: any, language: "es" | "en"): string {
+async function formatEventCard(e: any, language: "es" | "en"): Promise<string> {
   const isEn = language === "en";
   const lines: string[] = [];
   const rawContent = e.rawContent || e.raw_content || "";
@@ -138,15 +139,15 @@ function formatEventCard(e: any, language: "es" | "en"): string {
   if (sourceUrl || venue) {
     lines.push("");
     if (sourceUrl) {
-      lines.push(sourceUrl);
+      lines.push(await shortenUrl(sourceUrl));
     }
     if (venue) {
-      lines.push(getGoogleMapsUrl(venue, addr));
+      lines.push(await getGoogleMapsUrl(venue, addr));
     }
   }
 
   // 8. GOOGLE CALENDAR LINK
-  const gcalUrl = generateGoogleCalendarUrl(e);
+  const gcalUrl = await generateGoogleCalendarUrl(e);
   lines.push("");
   lines.push(language === "en"
     ? `Add to calendar: ${gcalUrl}`
@@ -453,7 +454,7 @@ async function sendStructuredEventCards(
     if (imgUrl.length < 10 || !imgUrl.startsWith("http")) {
       imgUrl = "";
     }
-    const card = formatEventCard(event, language);
+    const card = await formatEventCard(event, language);
 
     cardMessages.push({
       imageUrl: imgUrl || undefined,

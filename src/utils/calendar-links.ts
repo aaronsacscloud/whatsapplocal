@@ -4,6 +4,7 @@
  */
 
 import type { Event } from "../db/schema.js";
+import { shortenUrl } from "./short-url.js";
 
 // SMA is UTC-6
 const SMA_UTC_OFFSET_HOURS = 6;
@@ -71,7 +72,7 @@ function getEventDatesUTC(event: any): { start: Date; end: Date } {
  * Generate a Google Calendar URL for an event.
  * Users can click this link to add the event to their Google Calendar.
  */
-export function generateGoogleCalendarUrl(event: any): string {
+export async function generateGoogleCalendarUrl(event: any): Promise<string> {
   const { start, end } = getEventDatesUTC(event);
   const title = event.title || "Evento";
   const venue = event.venueName || event.venue_name || "";
@@ -88,7 +89,8 @@ export function generateGoogleCalendarUrl(event: any): string {
     details: description.substring(0, 500),
   });
 
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  const longUrl = `https://calendar.google.com/calendar/render?${params.toString()}`;
+  return shortenUrl(longUrl);
 }
 
 /**
@@ -133,8 +135,8 @@ export function generateIcsContent(event: any): string {
  * Generate a formatted calendar message with Google Calendar link.
  * This is appended to event cards in WhatsApp messages.
  */
-export function generateCalendarMessage(event: any, language: "es" | "en"): string {
-  const gcalUrl = generateGoogleCalendarUrl(event);
+export async function generateCalendarMessage(event: any, language: "es" | "en"): Promise<string> {
+  const gcalUrl = await generateGoogleCalendarUrl(event);
   const isEn = language === "en";
   return isEn
     ? `Add to calendar: ${gcalUrl}`

@@ -72,7 +72,7 @@ export async function handleCalendarRequest(
       logger.warn("Document send failed, sending ICS as text");
     }
 
-    const gcalUrl = generateGoogleCalendarUrl(targetEvent);
+    const gcalUrl = await generateGoogleCalendarUrl(targetEvent);
     const confirmMsg = isEnglish
       ? `Added to calendar: *${targetEvent.title}*\n\nGoogle Calendar: ${gcalUrl}\n\nIf the file didn't arrive, you can use the link above.`
       : `Agregado al calendario: *${targetEvent.title}*\n\nGoogle Calendar: ${gcalUrl}\n\nSi no llego el archivo, usa el link de arriba.`;
